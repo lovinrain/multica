@@ -633,6 +633,28 @@ describe("TimelineEntriesSchema", () => {
 });
 
 describe("AgentTaskListSchema", () => {
+  it.each(["external_coordinator", "future_source"])("preserves open attribution source %s", (source) => {
+    const [run] = AgentTaskListSchema.parse([{ id: "managed-run", attribution: { source, precise: true, initiator: { id: "authorizer", name: "Ada" } } }]);
+    expect(run?.attribution).toMatchObject({ source, precise: true, initiator: { id: "authorizer", name: "Ada" } });
+  });
+
+  it.each(["http://localhost:3000/#session=run-1", "https://muxpilot.example/runs/run-1"]) ("preserves safe Muxpilot run links: %s", (url) => {
+    expect(AgentTaskListSchema.parse([{ id: "run-1", muxpilot_terminal_url: url, muxpilot_terminal_state: "history", muxpilot_session_id: "session-1" }])[0])
+      .toMatchObject({ muxpilot_terminal_url: url, muxpilot_terminal_state: "history", muxpilot_session_id: "session-1" });
+  });
+
+  it.each([undefined, null, 42, "", "javascript:alert(1)", "data:text/html,test", "file:///tmp/run", "//host/run", "/run", "https://", "https://user:secret@host/run"])("discards unsafe Muxpilot URLs without losing the run: %s", (url) => {
+    const [run] = AgentTaskListSchema.parse([{ id: "run-1", muxpilot_terminal_url: url }]);
+    expect(run?.id).toBe("run-1");
+    expect(run?.muxpilot_terminal_url).toBeUndefined();
+  });
+
+  it("keeps old responses absent and degrades unknown terminal states independently", () => {
+    expect(AgentTaskListSchema.parse([{ id: "old" }])[0]?.muxpilot_terminal_state).toBeUndefined();
+    expect(AgentTaskListSchema.parse([{ id: "new", muxpilot_terminal_state: "future", muxpilot_session_id: 42 }])[0])
+      .toMatchObject({ id: "new", muxpilot_terminal_state: "unavailable", muxpilot_session_id: undefined });
+  });
+
   it("preserves negotiated supplement capability, ordered coverage and permission", () => {
     const parsed = AgentTaskListSchema.parse([{
       id: "run",

@@ -1,4 +1,11 @@
 {
+  "muxpilot": {
+    "terminal": {
+      "live": "Live terminal",
+      "history": "Terminal history",
+      "unavailable": "Terminal unavailable"
+    }
+  },
   "inline_run": {
     "label": "{{name}} run",
     "stop": "Stop",
@@ -740,6 +747,7 @@
       "on_behalf_of": "On behalf of {{name}}",
       "someone": "someone",
       "source_direct_human": "Direct member action",
+      "source_external_coordinator": "External coordinator",
       "source_delegation": "Delegated from another run",
       "source_comment_source": "From a comment thread",
       "source_trigger_owner": "Autopilot trigger creator",

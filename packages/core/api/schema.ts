@@ -53,3 +53,15 @@ export function parseWithFallback<T>(
   );
   return fallback;
 }
+
+/** Accept only absolute HTTP(S) destinations received from API responses. */
+export function safeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password
+      ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}

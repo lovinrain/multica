@@ -71,6 +71,20 @@ EOF
 
 out="$tmp_dir/out"
 
+# Linux listener discovery must work when lsof misses a renamed Node process.
+(
+  source "$root_dir/scripts/dev-env.sh"
+  lsof() { return 1; }
+  ss() {
+    [ "$*" = '-H -ltnp sport = :13150' ] || fail "ss did not filter the exact local port"
+    printf 'LISTEN 0 511 *:13150 *:* users:(("next-server",pid=420,fd=22))\n'
+  }
+  [ "$(port_listener_pid 13150)" = 420 ] || fail "ss fallback missed the Node listener"
+  lsof() { printf '421\n'; }
+  ss() { fail "ss should not run when lsof found a listener"; }
+  [ "$(port_listener_pid 13150)" = 421 ] || fail "lsof listener was not preferred"
+)
+
 assert_listener_ownership() {
   local case_name=$1 expected=$2 launcher=$3 listener=$4 listener_pgid=$5 recorded=${6:-}
   (
@@ -233,7 +247,9 @@ node -e '
   if (payload.backend_port !== 18981) throw new Error("backend_port = " + payload.backend_port);
   for (const key of ["api", "web", "daemon", "desktop"]) {
     if (!payload.components[key]) throw new Error("missing component " + key);
-    if (payload.components[key].state !== "stopped") {
+    const state = payload.components[key].state;
+    // A built CLI distinguishes a never-created test profile from a stopped one.
+    if (state !== "stopped" && !(key === "daemon" && state === "unknown_profile")) {
       throw new Error(key + " state = " + payload.components[key].state);
     }
   }

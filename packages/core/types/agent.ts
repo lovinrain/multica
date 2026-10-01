@@ -274,10 +274,20 @@ export interface TaskEvidence {
 export interface TaskAttribution {
   /**
    * Waterfall level that resolved the accountable human:
-   * `direct_human` | `delegation` | `comment_source` | `rule_owner` |
+   * `direct_human` | `external_coordinator` | `delegation` | `comment_source` | `rule_owner` |
    * `owner_fallback` | `backfill` | `unattributed`. Never blank.
    */
-  source: string;
+  source:
+    | "direct_human"
+    | "external_coordinator"
+    | "delegation"
+    | "comment_source"
+    | "trigger_owner"
+    | "rule_owner"
+    | "owner_fallback"
+    | "backfill"
+    | "unattributed"
+    | (string & {});
   /** False for degraded sources (owner_fallback / backfill / unattributed). */
   precise: boolean;
   /** The accountable human ("on behalf of"). Absent when unattributed. */
@@ -301,6 +311,10 @@ export interface TaskCancellationActor {
 }
 
 export interface AgentTask {
+  /** Exact run-scoped Muxpilot terminal or retained history destination. */
+  muxpilot_terminal_url?: string;
+  muxpilot_terminal_state?: "live" | "history" | "unavailable";
+  muxpilot_session_id?: string;
   wakeup_id?: string;
   id: string;
   agent_id: string;

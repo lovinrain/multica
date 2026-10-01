@@ -358,6 +358,12 @@ type TaskCancellationActor struct {
 }
 
 type AgentTaskResponse struct {
+	MuxpilotTerminalURL   string `json:"muxpilot_terminal_url,omitempty"`
+	MuxpilotTerminalState string `json:"muxpilot_terminal_state,omitempty"`
+	MuxpilotSessionID     string `json:"muxpilot_session_id,omitempty"`
+	MuxpilotGeneration    int64  `json:"muxpilot_generation,omitempty"`
+	MuxpilotBaseSHA       string `json:"muxpilot_base_sha,omitempty"`
+
 	StartClaimSupported      bool                   `json:"start_claim_supported,omitempty"`
 	CancelledByCommentChange bool                   `json:"cancelled_by_comment_change,omitempty"`
 	CancelledBy              *TaskCancellationActor `json:"cancelled_by,omitempty"`

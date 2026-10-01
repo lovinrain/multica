@@ -8159,7 +8159,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath, BaseSHA: task.MuxpilotBaseSHA}
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.
@@ -8580,6 +8580,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		profileFixedArgs, hermesOverlayCustomArgs = agent.StripHermesProfileSelectors(
 			profileFixedArgs, rawCustomArgs, d.logger)
 	}
+	if task.MuxpilotGeneration > 0 && env.LocalWorktree != nil {
+		agentEnv["MUXPILOT_BASE_SHA"] = env.LocalWorktree.BaseCommit
+	}
+	// Identity comes from the authenticated claim, after custom env layering.
+	// The wrapper owns observation only; this daemon retains provider stdio.
+	if task.MuxpilotGeneration > 0 {
+		agentEnv["MUXPILOT_PROJECT_ID"] = task.ProjectID
+		agentEnv["MUXPILOT_ISSUE_ID"] = task.IssueID
+		agentEnv["MUXPILOT_TASK_ID"] = task.ID
+		agentEnv["MUXPILOT_RUN_ID"] = task.ID
+		agentEnv["MUXPILOT_GENERATION"] = strconv.FormatInt(task.MuxpilotGeneration, 10)
+	}
 	// Resolve the backend through the unified runtime resolver: built-in
 	// runtime identities (e.g. "omp") dispatch through NewRuntime, protocol
 	// families go through New. This is the single production boundary — the
@@ -8772,6 +8784,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Shared across the resume-retry below so the retry's transcript rows
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
+	if task.MuxpilotGeneration > 0 {
+		agentEnv["MUXPILOT_EXECUTION_ID"] = uuid.NewString()
+		agentEnv["MUXPILOT_WORKTREE"] = execOpts.Cwd
+	}
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		return TaskResult{}, err
@@ -8828,6 +8844,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
 
+		if task.MuxpilotGeneration > 0 {
+			agentEnv["MUXPILOT_EXECUTION_ID"] = uuid.NewString()
+		}
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start; keeping the original poisoned result", "error", retryErr)
@@ -10354,6 +10373,10 @@ func socketSafeTempBaseDir() string {
 // daemon-internal variables and critical system paths.
 func isBlockedEnvKey(key string) bool {
 	upper := strings.ToUpper(key)
+	switch upper {
+	case "MUXPILOT_PROJECT_ID", "MUXPILOT_TASK_ID", "MUXPILOT_ISSUE_ID", "MUXPILOT_RUN_ID", "MUXPILOT_EXECUTION_ID", "MUXPILOT_GENERATION", "MUXPILOT_WORKTREE", "MUXPILOT_BASE_SHA":
+		return true
+	}
 	if strings.HasPrefix(upper, "MULTICA_") {
 		return true
 	}

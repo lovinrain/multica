@@ -56,14 +56,19 @@ func (q *Queries) AckTaskSupplementDelivered(ctx context.Context, arg AckTaskSup
 }
 
 const ackTaskSupplementFailed = `-- name: AckTaskSupplementFailed :one
-UPDATE task_supplement
+UPDATE task_supplement s
 SET status = 'failed',
     failure_reason = $1,
     updated_at = now()
-WHERE task_id = $2
-  AND comment_id = $3
-  AND status = 'delivering'
-RETURNING task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status, failure_reason, attempt_count, created_at, updated_at, delivered_at
+WHERE s.task_id = $2
+  AND s.comment_id = $3
+  AND (s.status = 'delivering'
+       OR (s.status='failed' AND s.failure_reason='turn_ended' AND EXISTS (
+           SELECT 1 FROM muxpilot_supplement m
+           WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+             AND m.delivery_active
+       )))
+RETURNING s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at
 `
 
 type AckTaskSupplementFailedParams struct {
@@ -182,15 +187,36 @@ func (q *Queries) BindCommentTaskSupplement(ctx context.Context, arg BindComment
 }
 
 const claimNextTaskSupplement = `-- name: ClaimNextTaskSupplement :one
-WITH next AS MATERIALIZED (
+WITH coordinator AS MATERIALIZED (
+    SELECT c.project_id,c.workspace_id,c.generation,c.expires_at
+    FROM agent_task_queue t
+    JOIN issue i ON i.id=t.issue_id
+    JOIN muxpilot_coordinator c ON c.project_id=i.project_id AND c.workspace_id=i.workspace_id
+    WHERE t.id = $1
+    FOR UPDATE OF c
+), next AS MATERIALIZED (
     SELECT s.comment_id, s.task_id
     FROM task_supplement s
     JOIN agent_task_queue t ON t.id = s.task_id
     JOIN task_supplement_capability cap ON cap.task_id = t.id
     WHERE s.task_id = $1
       AND s.status = 'pending'
+      AND (SELECT count(*) FROM coordinator) >= 0
       AND t.status = 'running'
       AND cap.capability = 'task-supplement-v1'
+      AND (
+          NOT EXISTS (
+              SELECT 1 FROM muxpilot_supplement m
+              WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+          )
+          OR EXISTS (
+              SELECT 1 FROM muxpilot_supplement m
+              JOIN coordinator c ON c.project_id=m.project_id AND c.generation=m.generation
+              JOIN muxpilot_run r ON r.task_id=m.task_id AND r.project_id=m.project_id
+              WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+                AND c.expires_at > clock_timestamp()
+          )
+      )
     ORDER BY s.created_at, s.comment_id
     FOR UPDATE OF s SKIP LOCKED
     LIMIT 1
@@ -204,21 +230,36 @@ WITH next AS MATERIALIZED (
     WHERE s.comment_id = next.comment_id
       AND s.task_id = next.task_id
     RETURNING s.task_id, s.workspace_id, s.issue_id, s.comment_id, s.author_id, s.client_request_id, s.status, s.failure_reason, s.attempt_count, s.created_at, s.updated_at, s.delivered_at
+), reserved AS (
+    UPDATE muxpilot_supplement m
+    SET delivery_active=true
+    FROM claimed
+    WHERE m.comment_id=claimed.comment_id AND m.task_id=claimed.task_id
+    RETURNING m.comment_id,m.task_id
 )
 SELECT claimed.comment_id, claimed.attempt_count, c.content,
-       COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name
+       COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name,
+       m.generation AS muxpilot_generation, m.project_id AS muxpilot_project_id
 FROM claimed
+CROSS JOIN (SELECT count(*) FROM reserved) reservation
 JOIN comment c ON c.id = claimed.comment_id
 LEFT JOIN "user" u ON u.id = claimed.author_id
+LEFT JOIN muxpilot_supplement m ON m.comment_id=claimed.comment_id AND m.task_id=claimed.task_id
 `
 
 type ClaimNextTaskSupplementRow struct {
-	CommentID    pgtype.UUID `json:"comment_id"`
-	AttemptCount int32       `json:"attempt_count"`
-	Content      string      `json:"content"`
-	AuthorName   string      `json:"author_name"`
+	CommentID          pgtype.UUID `json:"comment_id"`
+	AttemptCount       int32       `json:"attempt_count"`
+	Content            string      `json:"content"`
+	AuthorName         string      `json:"author_name"`
+	MuxpilotGeneration pgtype.Int8 `json:"muxpilot_generation"`
+	MuxpilotProjectID  pgtype.UUID `json:"muxpilot_project_id"`
 }
 
+// The coordinator is locked before any receipt. Lease takeover uses this
+// same order, so a delivery reservation either precedes takeover or observes
+// its new generation; it never reads the old generation then deadlocks while
+// the receipt feed tries to lock the coordinator after mutation.
 func (q *Queries) ClaimNextTaskSupplement(ctx context.Context, taskID pgtype.UUID) (ClaimNextTaskSupplementRow, error) {
 	row := q.db.QueryRow(ctx, claimNextTaskSupplement, taskID)
 	var i ClaimNextTaskSupplementRow
@@ -227,6 +268,8 @@ func (q *Queries) ClaimNextTaskSupplement(ctx context.Context, taskID pgtype.UUI
 		&i.AttemptCount,
 		&i.Content,
 		&i.AuthorName,
+		&i.MuxpilotGeneration,
+		&i.MuxpilotProjectID,
 	)
 	return i, err
 }

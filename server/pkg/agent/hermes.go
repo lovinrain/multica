@@ -1256,7 +1256,18 @@ func (c *hermesClient) requestAndNotifySent(ctx context.Context, method string, 
 		return nil, err
 	}
 	data = append(data, '\n')
-	if err := c.writeLine(data); err != nil {
+	writeRequest := func() error {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
+		if method == "_x.ai/interject" {
+			if err := CheckSupplementAuthority(ctx); err != nil {
+				return err
+			}
+		}
+		_, err := c.stdin.Write(data)
+		return err
+	}
+	if err := writeRequest(); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()

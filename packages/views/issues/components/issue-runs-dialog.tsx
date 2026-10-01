@@ -44,6 +44,7 @@ import {
 } from "./issue-run-timeline";
 import { canRetryRun, RetryRunButton } from "./retry-run-button";
 import { useStatusLabel, useTriggerText } from "./task-run-labels";
+import { MuxpilotTerminalLink } from "./muxpilot-terminal-link";
 import { WakeupRunLabel } from "./wakeup-source-chip";
 
 // The issue's runs laid out in time — the surface the execution log's header
@@ -856,6 +857,7 @@ function RunListRow({
           </span>
         )}
       </span>
+      <MuxpilotTerminalLink task={task} />
       <span className="flex w-14 shrink-0 items-center justify-end gap-0.5 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/run-row:opacity-100 [@media(hover:hover)]:focus-within:opacity-100">
         <TranscriptButton
           task={task}

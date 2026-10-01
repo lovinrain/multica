@@ -1,4 +1,11 @@
 {
+  "muxpilot": {
+    "terminal": {
+      "live": "ライブターミナル",
+      "history": "ターミナル履歴",
+      "unavailable": "ターミナルを利用できません"
+    }
+  },
   "inline_run": {
     "label": "{{name}} の実行",
     "stop": "停止",
@@ -712,6 +719,7 @@
       "on_behalf_of": "{{name}} の代理として",
       "someone": "あるメンバー",
       "source_direct_human": "メンバーの直接操作",
+      "source_external_coordinator": "外部コーディネーター",
       "source_delegation": "別の実行から委任",
       "source_comment_source": "コメントスレッドから",
       "source_trigger_owner": "オートパイロットのトリガー作成者",

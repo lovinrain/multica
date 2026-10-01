@@ -2713,6 +2713,14 @@ func (c *codexClient) request(ctx context.Context, method string, params any) (j
 		return nil, err
 	}
 	data = append(data, '\n')
+	if method == "turn/steer" {
+		if err := CheckSupplementAuthority(requestCtx); err != nil {
+			c.mu.Lock()
+			delete(c.pending, id)
+			c.mu.Unlock()
+			return nil, err
+		}
+	}
 	if _, err := c.stdin.Write(data); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)

@@ -1912,3 +1912,104 @@ func TestIsolatedPrepareKeepsTheReadOnlyBranchDrop(t *testing.T) {
 		t.Error("a turn that changed nothing left its branch behind")
 	}
 }
+
+// Explicit stage ancestry must not silently follow the source checkout.
+func TestPrepareLocalWorktreePinnedBase(t *testing.T) {
+	repo := newTestRepo(t)
+	base := gitRun(t, repo, "rev-parse", "HEAD")
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tracked.txt", "new HEAD\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "advance source")
+	sourceHead := gitRun(t, repo, "rev-parse", "HEAD")
+	write("tracked.txt", "staged\n")
+	gitRun(t, repo, "add", "tracked.txt")
+	write("tracked.txt", "unstaged\n")
+	write("untracked.txt", "scratch\n")
+	status := gitRun(t, repo, "status", "--porcelain=v1")
+	staged := gitRun(t, repo, "diff", "--cached")
+	unstaged := gitRun(t, repo, "diff")
+	indexBefore, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := LocalWorktreeParams{LocalPath: repo, EnvRoot: t.TempDir(), TaskID: "first-stage", AgentName: "test", BaseSHA: base,
+		ConversationKey: "same-issue", WorkspaceID: "workspace", AgentID: "agent", ConversationID: "issue"}
+	wt, err := PrepareLocalWorktree(params, worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wt.BaseCommit != base || gitRun(t, wt.Path, "rev-parse", "HEAD") != base || wt.Continued || wt.DirtyBaseCaptured {
+		t.Fatalf("wrong pinned baseline: %+v", wt)
+	}
+	content, err := os.ReadFile(filepath.Join(wt.Path, "tracked.txt"))
+	if err != nil || string(content) != "original\n" {
+		t.Fatalf("pin did not restore exact base content: %q, %v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(wt.Path, "untracked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("source untracked file replayed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wt.Path, "tracked.txt"), []byte("stage output\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := wt.Finalize(worktreeTestLogger())
+	if err != nil || outcome.Branch == "" {
+		t.Fatalf("finalize: %+v, %v", outcome, err)
+	}
+	delivered := gitRun(t, repo, "rev-parse", outcome.Branch)
+	// A later stage explicitly starts at the preceding delivered commit, even
+	// though its conversation and the source checkout remain unchanged.
+	params.BaseSHA = delivered
+	params.TaskID = "followup-stage"
+	params.EnvRoot = t.TempDir()
+	next, err := PrepareLocalWorktree(params, worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.BaseCommit != delivered || gitRun(t, next.Path, "rev-parse", "HEAD") != delivered || next.Branch == outcome.Branch || next.Continued {
+		t.Fatalf("followup ignored exact pin: %+v", next)
+	}
+	if _, err := next.Finalize(worktreeTestLogger()); err != nil {
+		t.Fatal(err)
+	}
+	indexAfter, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(indexBefore) != string(indexAfter) {
+		t.Fatal("source index changed")
+	}
+	if gitRun(t, repo, "rev-parse", "HEAD") != sourceHead || gitRun(t, repo, "status", "--porcelain=v1") != status || gitRun(t, repo, "diff", "--cached") != staged || gitRun(t, repo, "diff") != unstaged {
+		t.Fatal("source checkout or staged/unstaged edits changed")
+	}
+	content, err = os.ReadFile(filepath.Join(repo, "untracked.txt"))
+	if err != nil || string(content) != "scratch\n" {
+		t.Fatalf("source untracked content changed: %q, %v", content, err)
+	}
+}
+
+func TestPrepareLocalWorktreeInvalidPinHasNoEffects(t *testing.T) {
+	for _, base := range []string{strings.Repeat("a", 40), "HEAD", "--help"} {
+		t.Run(base, func(t *testing.T) {
+			repo := newTestRepo(t)
+			envRoot := filepath.Join(t.TempDir(), "not-created")
+			refs := gitRun(t, repo, "show-ref")
+			worktrees := gitRun(t, repo, "worktree", "list", "--porcelain")
+			_, err := PrepareLocalWorktree(LocalWorktreeParams{LocalPath: repo, EnvRoot: envRoot, TaskID: "invalid-stage", BaseSHA: base}, worktreeTestLogger())
+			if err == nil {
+				t.Fatal("invalid pin accepted")
+			}
+			if gitRun(t, repo, "show-ref") != refs || gitRun(t, repo, "worktree", "list", "--porcelain") != worktrees {
+				t.Fatal("invalid pin mutated refs or worktrees")
+			}
+			if _, err := os.Stat(envRoot); !os.IsNotExist(err) {
+				t.Fatalf("invalid pin created env root: %v", err)
+			}
+		})
+	}
+}

@@ -79,6 +79,9 @@ type LocalWorktreeParams struct {
 	// or any subdirectory of it; the worktree always covers the whole repo,
 	// and the agent's cwd is the matching subdirectory inside it.
 	LocalPath string
+	// BaseSHA pins a task-scoped branch to this exact commit. Source edits are
+	// preserved in place and never replayed into a pinned worktree.
+	BaseSHA string
 	// EnvRoot is the daemon-owned task env root. The worktree is created
 	// inside it so the ordinary env-root GC reclaims it.
 	EnvRoot string
@@ -300,6 +303,20 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 		return nil, err
 	}
 
+	// Validate the pin before locks, housekeeping, snapshots or branch creation.
+	// Only full commit object IDs are accepted, never revisions or tag objects.
+	pinnedBase := ""
+	if params.BaseSHA != "" {
+		decoded, decodeErr := hex.DecodeString(params.BaseSHA)
+		if decodeErr != nil || (len(decoded) != 20 && len(decoded) != 32) {
+			return nil, errors.New("execenv: base SHA must be a full 40 or 64 character hexadecimal commit ID")
+		}
+		pinnedBase, err = runGitTrimmed(gitRoot, "rev-parse", "--verify", params.BaseSHA+"^{commit}")
+		if err != nil || pinnedBase != strings.ToLower(params.BaseSHA) {
+			return nil, fmt.Errorf("execenv: requested base SHA %q is not an available commit: %v", params.BaseSHA, err)
+		}
+	}
+
 	// The agent's cwd keeps the user's chosen depth: a resource pointed at
 	// <repo>/services/api must land the agent in <worktree>/services/api, not
 	// at the repo root, or the task's whole notion of "the project" shifts.
@@ -349,6 +366,30 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 			"git_root", gitRoot, "output", out, "error", pruneErr)
 	}
 	pruneOrphanedStateRefs(gitRoot, logger)
+
+	if pinnedBase != "" {
+		// Stage pins define their own ancestry. Conversation branches and dirty
+		// source snapshots must not replace that explicitly requested baseline.
+		taskParams := params
+		taskParams.ConversationKey = ""
+		plan := resolveTaskBranch(gitRoot, taskParams, pinnedBase, logger)
+		branch, created, addErr := addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
+		if addErr != nil {
+			return nil, addErr
+		}
+		wt := &LocalWorktree{
+			GitRoot: gitRoot, Path: worktreePath,
+			WorkDir: filepath.Join(worktreePath, rel), Branch: branch,
+			BaseCommit: pinnedBase, createdBranch: created,
+		}
+		if logger != nil {
+			dirty, dirtyErr := worktreeIsDirty(gitRoot)
+			logger.Info("execenv: pinned local worktree ready; source edits remain in the source directory and are not replayed",
+				"path", worktreePath, "branch", branch, "base", pinnedBase,
+				"source_dirty", dirty, "source_inspection_error", dirtyErr)
+		}
+		return wt, nil
+	}
 
 	headSHA, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "HEAD")
 	if err != nil {

@@ -1168,6 +1168,65 @@ type Member struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type MuxpilotCoordinator struct {
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	RuntimeProfileID pgtype.UUID        `json:"runtime_profile_id"`
+	Generation       int64              `json:"generation"`
+	TokenHash        string             `json:"token_hash"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	DispatchHeld     bool               `json:"dispatch_held"`
+	WorkerLimit      int32              `json:"worker_limit"`
+}
+
+type MuxpilotEvent struct {
+	Sequence    int64              `json:"sequence"`
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ActorType   string             `json:"actor_type"`
+	ActorID     string             `json:"actor_id"`
+	Type        string             `json:"type"`
+	Payload     []byte             `json:"payload"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type MuxpilotIssue struct {
+	IssueID   pgtype.UUID `json:"issue_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	Stage     int32       `json:"stage"`
+	Eligible  bool        `json:"eligible"`
+	BaseSha   string      `json:"base_sha"`
+}
+
+type MuxpilotOperation struct {
+	OperationID pgtype.UUID `json:"operation_id"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	Generation  int64       `json:"generation"`
+	RequestHash string      `json:"request_hash"`
+	Response    []byte      `json:"response"`
+	Status      int32       `json:"status"`
+}
+
+type MuxpilotRun struct {
+	TaskID        pgtype.UUID `json:"task_id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	Generation    int64       `json:"generation"`
+	TerminalUrl   string      `json:"terminal_url"`
+	TerminalState string      `json:"terminal_state"`
+	SessionID     string      `json:"session_id"`
+}
+
+type MuxpilotSupplement struct {
+	CommentID      pgtype.UUID `json:"comment_id"`
+	TaskID         pgtype.UUID `json:"task_id"`
+	ProjectID      pgtype.UUID `json:"project_id"`
+	Generation     int64       `json:"generation"`
+	DeliveryActive bool        `json:"delivery_active"`
+	OutcomeUnknown bool        `json:"outcome_unknown"`
+}
+
 type NotificationPreference struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

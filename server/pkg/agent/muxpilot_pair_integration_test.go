@@ -38,7 +38,9 @@ func TestMuxpilotCodexPairedSmoke(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancel()
+	runID := uuid.NewString()
 	cmd := exec.CommandContext(ctx, python, script)
+	cmd.Env = append(os.Environ(), "MULTICA_MUXPILOT_SMOKE_RUN_ID="+runID)
 	output, runErr := cmd.CombinedOutput()
 	logPath := reportPath + ".driver.log"
 	if err := os.WriteFile(logPath, output, 0600); err != nil {
@@ -78,7 +80,7 @@ func TestMuxpilotCodexPairedSmoke(t *testing.T) {
 	if json.Unmarshal(raw, &report) != nil {
 		t.Fatal("paired smoke report is not valid JSON")
 	}
-	if report.SchemaVersion != 1 || !report.Passed || report.Provider != "codex" || report.Model != "gpt-6.1-sol" || report.WorkerCount < 1 || report.WorkerCount > 3 || report.DurationSeconds <= 0 || report.DurationSeconds > 600 || !report.RepositoryPrivate || !filepath.IsAbs(report.RepoRoot) {
+	if report.RunID != runID || report.SchemaVersion != 1 || !report.Passed || report.Provider != "codex" || report.Model != "gpt-6.1-sol" || report.WorkerCount < 1 || report.WorkerCount > 3 || report.DurationSeconds <= 0 || report.DurationSeconds > 600 || !report.RepositoryPrivate || !filepath.IsAbs(report.RepoRoot) {
 		t.Fatal("paired smoke report does not satisfy the authorized provider, model, worker, time and private-repository limits")
 	}
 	pr, err := url.Parse(report.DraftPRURL)

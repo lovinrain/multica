@@ -240,7 +240,12 @@ archived statuses remain readable via an explicit status filter.
   `done` it enqueues no new agent work, but it does **not** stop tasks already in
   flight — a run in progress keeps going. To stop a running task, cancel the
   task itself.
-  A cancelled issue may also be marked as a **duplicate** of another issue
+  A cancelled issue may also be marked as a **duplicate** of another issue.
+  When you cancel an issue because the work already exists elsewhere, mark it
+  with `multica issue status <id> cancelled --duplicate-of <original>` rather
+  than cancelling and explaining in a comment: only the mark links the two.
+  The original must not itself be a duplicate, and an issue that others are
+  marked as duplicates of cannot be marked; the command reports both refusals.
   (`GET /api/issues/<id>/duplicates` shows both sides; issue responses carry
   the original as `duplicate_of` with its id, identifier, title and status
   while the mark counts). Moving it to any

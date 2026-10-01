@@ -264,6 +264,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("- `multica issue update <id> [--title X] [--description-file <path>] [--priority X] [--status X] [--assignee X] [--parent <issue-id>] [--stage N] [--project <project-id>] [--due-date <YYYY-MM-DD>]` — update fields; pass `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign)` — change ownership; assigning to an agent can start a run.\n")
 	writeIssueStatusCommand(b, ctx)
+	b.WriteString(duplicateOfCommandLine)
 	b.WriteString("- `multica issue wakeup <create|list|get|update|disable|trigger|delete|runs|events>` — persist an event, condition or time wakeup on this issue, then finish the current run. When the platform can check the fact itself, use a condition (`--until-status`, `--until-pr checks`, `--until-children-done`, `--until-issue`) so no run starts before it holds. Use `--event comment.created --filter-actor-type member --filter-actor-id USER_ID` to wait for a specific member to comment. See `multica issue wakeup --help` and the multica-platform issues reference.\n")
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
@@ -281,6 +282,11 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — change role in place (use this instead of remove+add).\n\n")
 	}
 }
+
+// duplicateOfCommandLine teaches the duplicate mark (MUL-7821). Without it
+// agents cancel duplicates with a plain status change plus a comment, which
+// leaves the original's duplicates list empty.
+const duplicateOfCommandLine = "- `multica issue status <id> cancelled --duplicate-of <original>` — cancel an issue that duplicates another and record the mark, so the original lists it; a plain cancel plus a comment leaves no link.\n"
 
 // briefStatusCategoryOrder groups the briefing catalog by internal lifecycle,
 // matching ListIssueStatusEntries. User-facing columns still use status keys.

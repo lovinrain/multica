@@ -19,6 +19,7 @@ func (h *Handler) hydrateTaskSupplementMetadata(ctx context.Context, r *http.Req
 	if len(tasks) == 0 || len(tasks) != len(resp) {
 		return
 	}
+	h.hydrateMuxpilotTaskMetadata(ctx, workspaceID, tasks, resp)
 	taskIDs := make([]pgtype.UUID, 0, len(tasks))
 	for i := range tasks {
 		if tasks[i].IssueID.Valid {
@@ -376,8 +377,9 @@ func (h *Handler) RetryTaskSupplement(w http.ResponseWriter, r *http.Request) {
 }
 
 type ackTaskSupplementRequest struct {
-	Delivered bool   `json:"delivered"`
-	Error     string `json:"error,omitempty"`
+	Delivered      bool   `json:"delivered"`
+	OutcomeUnknown bool   `json:"outcome_unknown,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +398,7 @@ func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"comment_id": uuidToString(row.CommentID), "author_name": row.AuthorName, "content": row.Content,
+		"muxpilot_generation": row.MuxpilotGeneration.Int64, "muxpilot_project_id": uuidToString(row.MuxpilotProjectID),
 	})
 }
 
@@ -413,15 +416,46 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "failed to acknowledge additional message")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var controlProject string
+	err = tx.QueryRow(r.Context(), `SELECT c.project_id::text FROM muxpilot_coordinator c JOIN muxpilot_supplement m ON m.project_id=c.project_id WHERE m.task_id=$1 AND m.comment_id=$2 FOR UPDATE OF c`, parseUUID(taskID), commentID).Scan(&controlProject)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 500, "failed to acknowledge additional message")
+		return
+	}
+	q := h.Queries.WithTx(tx)
 	var row db.TaskSupplement
-	var err error
+	if req.OutcomeUnknown {
+		if controlProject == "" || req.Delivered {
+			writeError(w, 400, "uncertain outcome requires coordinator guidance")
+			return
+		}
+		_, err = tx.Exec(r.Context(), `UPDATE task_supplement SET failure_reason='delivery_unknown',updated_at=now() WHERE task_id=$1 AND comment_id=$2`, parseUUID(taskID), commentID)
+		if err == nil {
+			_, err = tx.Exec(r.Context(), `UPDATE muxpilot_supplement SET outcome_unknown=true WHERE task_id=$1 AND comment_id=$2 AND delivery_active`, parseUUID(taskID), commentID)
+		}
+		if err == nil {
+			err = tx.Commit(r.Context())
+		}
+		if err != nil {
+			writeError(w, 500, "failed to retain uncertain delivery")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"supplement_task_id": taskID, "supplement_status": "delivering", "supplement_failure_reason": "delivery_unknown", "delivery_reserved": true})
+		return
+	}
 	if req.Delivered {
-		row, err = h.Queries.AckTaskSupplementDelivered(r.Context(), db.AckTaskSupplementDeliveredParams{
+		row, err = q.AckTaskSupplementDelivered(r.Context(), db.AckTaskSupplementDeliveredParams{
 			TaskID: parseUUID(taskID), CommentID: commentID,
 		})
 	} else {
 		reason := stableTaskSupplementFailureReason(req.Error)
-		row, err = h.Queries.AckTaskSupplementFailed(r.Context(), db.AckTaskSupplementFailedParams{
+		row, err = q.AckTaskSupplementFailed(r.Context(), db.AckTaskSupplementFailedParams{
 			TaskID: parseUUID(taskID), CommentID: commentID,
 			FailureReason: pgtype.Text{String: reason, Valid: true},
 		})
@@ -434,6 +468,17 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to acknowledge additional message")
 		return
 	}
+	if controlProject != "" {
+		_, err = tx.Exec(r.Context(), `UPDATE muxpilot_supplement SET delivery_active=false,outcome_unknown=false WHERE task_id=$1 AND comment_id=$2`, parseUUID(taskID), commentID)
+		if err != nil {
+			writeError(w, 500, "failed to settle delivery reservation")
+			return
+		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "failed to acknowledge additional message")
+		return
+	}
 	h.publishTaskSupplementUpdate(r, row)
 	writeJSON(w, http.StatusOK, supplementReceipt(row))
 }
@@ -441,7 +486,7 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 func stableTaskSupplementFailureReason(reason string) string {
 	reason = strings.TrimSpace(sanitizeNullBytes(reason))
 	switch reason {
-	case protocol.TaskSupplementFailureTurnNotStarted, protocol.TaskSupplementFailureTimeout,
+	case "coordinator_revoked", protocol.TaskSupplementFailureTurnNotStarted, protocol.TaskSupplementFailureTimeout,
 		protocol.TaskSupplementFailureTurnEnded, protocol.TaskSupplementFailureProviderRejected:
 		return reason
 	default:

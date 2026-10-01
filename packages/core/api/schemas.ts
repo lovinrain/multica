@@ -1,3 +1,4 @@
+import { safeHttpUrl } from "./schema";
 import { z } from "zod";
 import { normalizeIssueStatusCategory } from "../issues/config/status";
 import type {
@@ -1862,6 +1863,7 @@ const TaskEvidenceSchema = z.object({
 }).loose();
 
 const TaskAttributionSchema = z.object({
+  // Includes external_coordinator; retain future sources from newer servers.
   source: z.string().default("unattributed"),
   precise: z.boolean().default(false),
   initiator: AttributionUserSchema.optional(),
@@ -1902,6 +1904,9 @@ const TaskUsageSchema = z.object({
 }).loose();
 
 export const AgentTaskSchema = z.object({
+  muxpilot_terminal_url: z.unknown().transform(safeHttpUrl),
+  muxpilot_terminal_state: z.enum(["live", "history", "unavailable"]).optional().catch("unavailable"),
+  muxpilot_session_id: z.string().optional().catch(undefined),
   wakeup_id: z.string().optional().catch(undefined),
   cancelled_by_comment_change: z.boolean().optional().catch(undefined),
   cancelled_by: TaskCancellationActorSchema.optional().catch(undefined),

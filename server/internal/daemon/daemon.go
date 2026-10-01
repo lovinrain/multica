@@ -34,7 +34,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
-	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
@@ -8159,7 +8158,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath, BaseSHA: task.MuxpilotBaseSHA}
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.
@@ -8580,6 +8579,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		profileFixedArgs, hermesOverlayCustomArgs = agent.StripHermesProfileSelectors(
 			profileFixedArgs, rawCustomArgs, d.logger)
 	}
+	if task.MuxpilotGeneration > 0 && env.LocalWorktree != nil {
+		agentEnv["MUXPILOT_BASE_SHA"] = env.LocalWorktree.BaseCommit
+	}
+	// Identity comes from the authenticated claim, after custom env layering.
+	// The wrapper owns observation only; this daemon retains provider stdio.
+	if task.MuxpilotGeneration > 0 {
+		agentEnv["MUXPILOT_PROJECT_ID"] = task.ProjectID
+		agentEnv["MUXPILOT_ISSUE_ID"] = task.IssueID
+		agentEnv["MUXPILOT_TASK_ID"] = task.ID
+		agentEnv["MUXPILOT_RUN_ID"] = task.ID
+		agentEnv["MUXPILOT_GENERATION"] = strconv.FormatInt(task.MuxpilotGeneration, 10)
+	}
+	// Capture only credential values, leaving provider environment and wire intact.
+	ctx = context.WithValue(ctx, transcriptScrubberKey{}, newRunTranscriptScrubber(os.Environ(), agentEnv))
 	// Resolve the backend through the unified runtime resolver: built-in
 	// runtime identities (e.g. "omp") dispatch through NewRuntime, protocol
 	// families go through New. This is the single production boundary — the
@@ -8772,6 +8785,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Shared across the resume-retry below so the retry's transcript rows
 	// keep ascending seq values for the same task.
 	var msgSeq atomic.Int32
+	if task.MuxpilotGeneration > 0 {
+		agentEnv["MUXPILOT_EXECUTION_ID"] = uuid.NewString()
+		agentEnv["MUXPILOT_WORKTREE"] = execOpts.Cwd
+	}
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 	if err != nil {
 		return TaskResult{}, err
@@ -8828,6 +8845,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		freshPrompt := BuildPrompt(task, provider, promptOptions...)
 
+		if task.MuxpilotGeneration > 0 {
+			agentEnv["MUXPILOT_EXECUTION_ID"] = uuid.NewString()
+		}
 		retryResult, retryTools, retryErr := d.executeAndDrain(ctx, backend, freshPrompt, execOpts, taskLog, task.ID, env.CodexHome, &msgSeq)
 		if retryErr != nil {
 			taskLog.Error("fresh session also failed to start; keeping the original poisoned result", "error", retryErr)
@@ -9283,7 +9303,15 @@ func freshSessionMayHelp(errText string) bool {
 // messages and is owned by the caller so a same-task retry continues the
 // sequence instead of restarting at 1 — the server orders the transcript by
 // seq alone, and duplicate seqs would interleave the two attempts' rows.
-func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID, codexHome string, msgSeq *atomic.Int32) (agent.Result, int32, error) {
+func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID, codexHome string, msgSeq *atomic.Int32) (result agent.Result, tools int32, returnErr error) {
+	scrubber := transcriptScrubberFromContext(ctx)
+	defer func() {
+		result.Output = scrubber.Text(result.Output)
+		result.Error = scrubber.Text(result.Error)
+		if returnErr != nil {
+			returnErr = scrubTranscriptError(scrubber, returnErr)
+		}
+	}()
 	phaseRecorder := taskPhaseRecorderFromContext(ctx)
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
 	// the agent subprocess (via the ctx passed to backend.Execute) AND the
@@ -9299,7 +9327,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		// cmd.Start() failure arrives here, so diagnosing ENOEXEC at this point
 		// covers claude, opencode and any CLI added later without a wrap in
 		// each backend (MUL-6164).
-		err = agent.ExplainExecError(err)
+		err = scrubTranscriptError(scrubber, agent.ExplainExecError(err))
 		taskLog.Debug("backend execute returned error", "error", err)
 		return agent.Result{}, 0, err
 	}
@@ -9436,20 +9464,27 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		// into a sequenced row. Callers hold mu so a ticker flush cannot assign
 		// a later seq between sealing the frame and appending the event that
 		// followed it.
-		sealPendingLocked := func() {
+		sealPendingLocked := func(final bool) {
 			if pendingContent.Len() == 0 {
 				return
 			}
-			s := msgSeq.Add(1)
-			batch = append(batch, TaskMessageData{
-				Seq:       int(s),
-				Type:      pendingType,
-				Content:   pendingContent.String(),
-				CreatedAt: pendingAt,
-			})
+			content, tail := scrubber.Split(pendingContent.String())
+			if final {
+				content, tail = scrubber.Text(pendingContent.String()), ""
+			}
 			pendingContent.Reset()
-			pendingType = ""
-			pendingAt = time.Time{}
+			pendingContent.WriteString(tail)
+			if content != "" {
+				s := msgSeq.Add(1)
+				batch = append(batch, TaskMessageData{Seq: int(s), Type: pendingType, Content: content, CreatedAt: pendingAt})
+				if pendingType == "text" {
+					taskLog.Debug("agent", "text", truncateLog(content, 200))
+				}
+			}
+			if tail == "" {
+				pendingType = ""
+				pendingAt = time.Time{}
+			}
 		}
 
 		appendPending := func(messageType, content string, observedAt time.Time) {
@@ -9459,7 +9494,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			mu.Lock()
 			defer mu.Unlock()
 			if pendingType != "" && pendingType != messageType {
-				sealPendingLocked()
+				sealPendingLocked(true)
 			}
 			if pendingContent.Len() == 0 {
 				pendingType = messageType
@@ -9468,9 +9503,9 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			pendingContent.WriteString(content)
 		}
 
-		flush := func() {
+		flush := func(final bool) {
 			mu.Lock()
-			sealPendingLocked()
+			sealPendingLocked(final)
 			toSend := batch
 			batch = nil
 			mu.Unlock()
@@ -9497,9 +9532,9 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			for {
 				select {
 				case <-ticker.C:
-					flush()
+					flush(false)
 				case <-firstVisible:
-					flush()
+					flush(false)
 				case <-done:
 					return
 				}
@@ -9575,7 +9610,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
 					mu.Lock()
-					sealPendingLocked()
+					sealPendingLocked(true)
 					if msg.CallID != "" {
 						callIDToTool[msg.CallID] = msg.Tool
 					}
@@ -9595,7 +9630,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 						// credential) to a peer that does not scrub nested
 						// values yet. Deployment order is not a control we
 						// have, so this side has to be safe on its own.
-						Input: redact.InputMap(msg.Input),
+						Input: scrubber.InputMap(msg.Input),
 					})
 					mu.Unlock()
 					flushFirstVisible()
@@ -9614,9 +9649,9 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 							break
 						}
 					}
-					output, outputTruncated := toolOutputPreview(msg.Output)
+					output, outputTruncated := toolOutputPreview(scrubber.Text(msg.Output))
 					mu.Lock()
-					sealPendingLocked()
+					sealPendingLocked(true)
 					toolName := msg.Tool
 					if toolName == "" && msg.CallID != "" {
 						toolName = callIDToTool[msg.CallID]
@@ -9644,17 +9679,15 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 						flushFirstVisible()
 					}
 				case agent.MessageText:
-					if msg.Content != "" {
-						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
-					}
 					appendPending("text", msg.Content, observedAt)
 					if msg.Content != "" {
 						flushFirstVisible()
 					}
 				case agent.MessageError:
+					msg.Content = scrubber.Text(msg.Content)
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
-					sealPendingLocked()
+					sealPendingLocked(true)
 					s := msgSeq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:       int(s),
@@ -9675,7 +9708,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		// in flight would otherwise keep posting batches after this goroutine
 		// signalled that the transcript tail was persisted.
 		<-tickerDone
-		flush()
+		flush(true)
 	}()
 
 	// waitForDrain blocks until the drain goroutine has flushed the transcript
@@ -10354,6 +10387,10 @@ func socketSafeTempBaseDir() string {
 // daemon-internal variables and critical system paths.
 func isBlockedEnvKey(key string) bool {
 	upper := strings.ToUpper(key)
+	switch upper {
+	case "MUXPILOT_PROJECT_ID", "MUXPILOT_TASK_ID", "MUXPILOT_ISSUE_ID", "MUXPILOT_RUN_ID", "MUXPILOT_EXECUTION_ID", "MUXPILOT_GENERATION", "MUXPILOT_WORKTREE", "MUXPILOT_BASE_SHA":
+		return true
+	}
 	if strings.HasPrefix(upper, "MULTICA_") {
 		return true
 	}

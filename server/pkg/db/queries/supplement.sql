@@ -174,15 +174,40 @@ WHERE supplement.task_id = task.id
   AND supplement.status IN ('pending', 'delivering');
 
 -- name: ClaimNextTaskSupplement :one
-WITH next AS MATERIALIZED (
+-- The coordinator is locked before any receipt. Lease takeover uses this
+-- same order, so a delivery reservation either precedes takeover or observes
+-- its new generation; it never reads the old generation then deadlocks while
+-- the receipt feed tries to lock the coordinator after mutation.
+WITH coordinator AS MATERIALIZED (
+    SELECT c.project_id,c.workspace_id,c.generation,c.expires_at
+    FROM agent_task_queue t
+    JOIN issue i ON i.id=t.issue_id
+    JOIN muxpilot_coordinator c ON c.project_id=i.project_id AND c.workspace_id=i.workspace_id
+    WHERE t.id = @task_id
+    FOR UPDATE OF c
+), next AS MATERIALIZED (
     SELECT s.comment_id, s.task_id
     FROM task_supplement s
     JOIN agent_task_queue t ON t.id = s.task_id
     JOIN task_supplement_capability cap ON cap.task_id = t.id
     WHERE s.task_id = @task_id
       AND s.status = 'pending'
+      AND (SELECT count(*) FROM coordinator) >= 0
       AND t.status = 'running'
       AND cap.capability = 'task-supplement-v1'
+      AND (
+          NOT EXISTS (
+              SELECT 1 FROM muxpilot_supplement m
+              WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+          )
+          OR EXISTS (
+              SELECT 1 FROM muxpilot_supplement m
+              JOIN coordinator c ON c.project_id=m.project_id AND c.generation=m.generation
+              JOIN muxpilot_run r ON r.task_id=m.task_id AND r.project_id=m.project_id
+              WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+                AND c.expires_at > clock_timestamp()
+          )
+      )
     ORDER BY s.created_at, s.comment_id
     FOR UPDATE OF s SKIP LOCKED
     LIMIT 1
@@ -196,12 +221,21 @@ WITH next AS MATERIALIZED (
     WHERE s.comment_id = next.comment_id
       AND s.task_id = next.task_id
     RETURNING s.*
+), reserved AS (
+    UPDATE muxpilot_supplement m
+    SET delivery_active=true
+    FROM claimed
+    WHERE m.comment_id=claimed.comment_id AND m.task_id=claimed.task_id
+    RETURNING m.comment_id,m.task_id
 )
 SELECT claimed.comment_id, claimed.attempt_count, c.content,
-       COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name
+       COALESCE(NULLIF(btrim(u.name), ''), 'a user')::text AS author_name,
+       m.generation AS muxpilot_generation, m.project_id AS muxpilot_project_id
 FROM claimed
+CROSS JOIN (SELECT count(*) FROM reserved) reservation
 JOIN comment c ON c.id = claimed.comment_id
-LEFT JOIN "user" u ON u.id = claimed.author_id;
+LEFT JOIN "user" u ON u.id = claimed.author_id
+LEFT JOIN muxpilot_supplement m ON m.comment_id=claimed.comment_id AND m.task_id=claimed.task_id;
 
 -- name: AckTaskSupplementDelivered :one
 -- The provider can accept input before completion while its HTTP acknowledgement
@@ -222,14 +256,19 @@ WHERE s.task_id = t.id
 RETURNING s.*;
 
 -- name: AckTaskSupplementFailed :one
-UPDATE task_supplement
+UPDATE task_supplement s
 SET status = 'failed',
     failure_reason = @failure_reason,
     updated_at = now()
-WHERE task_id = @task_id
-  AND comment_id = @comment_id
-  AND status = 'delivering'
-RETURNING *;
+WHERE s.task_id = @task_id
+  AND s.comment_id = @comment_id
+  AND (s.status = 'delivering'
+       OR (s.status='failed' AND s.failure_reason='turn_ended' AND EXISTS (
+           SELECT 1 FROM muxpilot_supplement m
+           WHERE m.comment_id=s.comment_id AND m.task_id=s.task_id
+             AND m.delivery_active
+       )))
+RETURNING s.*;
 
 -- name: RetryTaskSupplement :one
 WITH comment AS MATERIALIZED (

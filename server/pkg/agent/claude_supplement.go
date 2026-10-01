@@ -178,7 +178,6 @@ func (s *claudeSupplementSession) prepareHook(msg claudeSDKMessage) (func(io.Wri
 	if json.Unmarshal(msg.Request, &req) != nil || req.Subtype != "hook_callback" {
 		return nil, false
 	}
-	output := map[string]any{}
 	s.mu.Lock()
 	// Hook registrations are inherited by subagents. Only the main loop may
 	// consume instructions addressed to this Multica task.
@@ -186,7 +185,6 @@ func (s *claudeSupplementSession) prepareHook(msg claudeSDKMessage) (func(io.Wri
 	var delivered []*claudeSupplementInput
 	if owned && req.Input.AgentID == "" && msg.ParentToolUseID == "" && !s.ended && s.ctx.Err() == nil {
 		s.started = true
-		var texts []string
 		for _, input := range s.pending {
 			if err := input.ctx.Err(); err != nil {
 				input.done <- err
@@ -194,27 +192,52 @@ func (s *claudeSupplementSession) prepareHook(msg claudeSDKMessage) (func(io.Wri
 			}
 			delivered = append(delivered, input)
 			input.writing = true
-			texts = append(texts, input.text)
 		}
 		s.pending = nil
 		s.active = req.Input.Event != "Stop" || len(delivered) > 0
-		if len(delivered) > 0 {
+	}
+	s.mu.Unlock()
+	return func(w io.Writer) error {
+		// Check after the serialized writer is acquired: hook replies can wait
+		// behind a large initial prompt or earlier SDK control response.
+		if serialized, ok := w.(*claudeInputWriter); ok {
+			serialized.mu.Lock()
+			defer serialized.mu.Unlock()
+			w = serialized.w
+		}
+		var accepted []*claudeSupplementInput
+		var texts []string
+		for _, input := range delivered {
+			if err := CheckSupplementAuthority(input.ctx); err != nil {
+				input.done <- err
+				continue
+			}
+			accepted = append(accepted, input)
+			texts = append(texts, input.text)
+		}
+		output := map[string]any{}
+		if len(accepted) > 0 {
 			text := strings.Join(texts, "\n\n")
 			if req.Input.Event == "Stop" {
 				output = map[string]any{"decision": "block", "reason": text}
 			} else {
 				output["hookSpecificOutput"] = map[string]any{"hookEventName": req.Input.Event, "additionalContext": text}
 			}
+		} else if owned && req.Input.Event == "Stop" && req.Input.AgentID == "" && msg.ParentToolUseID == "" {
+			s.mu.Lock()
+			s.active = false
+			for _, input := range s.pending {
+				input.done <- context.Canceled
+			}
+			s.pending = nil
+			s.mu.Unlock()
 		}
-	}
-	frame := map[string]any{
-		"type":     "control_response",
-		"response": map[string]any{"subtype": "success", "request_id": msg.RequestID, "response": output},
-	}
-	s.mu.Unlock()
-	return func(w io.Writer) error {
+		frame := map[string]any{
+			"type":     "control_response",
+			"response": map[string]any{"subtype": "success", "request_id": msg.RequestID, "response": output},
+		}
 		err := writeClaudeFrame(w, frame)
-		for _, input := range delivered {
+		for _, input := range accepted {
 			input.done <- err
 		}
 		return err

@@ -529,6 +529,35 @@ func (q *Queries) DeleteWorkspaceLeafData(ctx context.Context, workspaceID pgtyp
 	return err
 }
 
+const deleteWorkspaceMuxpilotData = `-- name: DeleteWorkspaceMuxpilotData :exec
+WITH owned_projects AS MATERIALIZED (
+    SELECT project.id FROM project WHERE project.workspace_id = $1
+    UNION SELECT muxpilot_coordinator.project_id FROM muxpilot_coordinator WHERE muxpilot_coordinator.workspace_id = $1
+    UNION SELECT muxpilot_event.project_id FROM muxpilot_event WHERE muxpilot_event.workspace_id = $1
+), deleted_coordinators AS (
+    DELETE FROM muxpilot_coordinator WHERE muxpilot_coordinator.workspace_id = $1
+        OR muxpilot_coordinator.project_id IN (SELECT id FROM owned_projects)
+), deleted_supplements AS (
+    DELETE FROM muxpilot_supplement WHERE muxpilot_supplement.project_id IN (SELECT id FROM owned_projects)
+), deleted_runs AS (
+    DELETE FROM muxpilot_run WHERE muxpilot_run.project_id IN (SELECT id FROM owned_projects)
+), deleted_issues AS (
+    DELETE FROM muxpilot_issue WHERE muxpilot_issue.project_id IN (SELECT id FROM owned_projects)
+), deleted_operations AS (
+    DELETE FROM muxpilot_operation WHERE muxpilot_operation.project_id IN (SELECT id FROM owned_projects)
+)
+DELETE FROM muxpilot_event WHERE muxpilot_event.workspace_id = $1
+    OR muxpilot_event.project_id IN (SELECT id FROM owned_projects)
+`
+
+// Remove coordinators before native task/comment/issue rows: their feed triggers
+// otherwise recreate events during teardown. Project rows still exist here, so
+// FK-free child metadata remains reachable even without a live coordinator.
+func (q *Queries) DeleteWorkspaceMuxpilotData(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceMuxpilotData, workspaceID)
+	return err
+}
+
 const deleteWorkspacePluginData = `-- name: DeleteWorkspacePluginData :exec
 WITH installations AS MATERIALIZED (
     SELECT plugin_installation.id

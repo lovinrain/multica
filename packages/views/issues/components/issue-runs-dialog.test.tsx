@@ -303,3 +303,22 @@ describe("IssueRunsDialog", () => {
     expect(screen.getByRole("region", { name: "今天" })).toBeInTheDocument();
   });
 });
+
+ it("links each run to its own live terminal or retained history", () => {
+  open([
+    makeTask({ id: "live-run", status: "running", completed_at: null, muxpilot_terminal_state: "live", muxpilot_terminal_url: "https://muxpilot.example/#session=live-run" }),
+    makeTask({ id: "history-run", muxpilot_terminal_state: "history", muxpilot_terminal_url: "https://muxpilot.example/#session=history-run" }),
+    makeTask({ id: "gone-run", muxpilot_terminal_state: "unavailable" }),
+  ]);
+  expect(screen.getByRole("link", { name: "Live terminal" }).getAttribute("href")).toBe("https://muxpilot.example/#session=live-run");
+  const history = screen.getByRole("link", { name: "Terminal history" });
+  expect(history.getAttribute("href")).toBe("https://muxpilot.example/#session=history-run");
+  expect(history.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(screen.getByText("Terminal unavailable")).toBeTruthy();
+});
+
+it("never renders an unsafe terminal destination", () => {
+  open([makeTask({ muxpilot_terminal_state: "live", muxpilot_terminal_url: "javascript:alert(1)" })]);
+  expect(screen.queryByRole("link", { name: "Live terminal" })).toBeNull();
+  expect(screen.getByText("Terminal unavailable")).toBeTruthy();
+});

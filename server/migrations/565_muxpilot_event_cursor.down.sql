@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS muxpilot_event_cursor;

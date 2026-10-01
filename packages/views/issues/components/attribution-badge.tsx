@@ -70,6 +70,9 @@ export function AttributionBadge({
     case "direct_human":
       sourceLabel = t(($) => $.execution_log.attribution.source_direct_human);
       break;
+    case "external_coordinator":
+      sourceLabel = t(($) => $.execution_log.attribution.source_external_coordinator);
+      break;
     case "delegation":
       sourceLabel = t(($) => $.execution_log.attribution.source_delegation);
       break;

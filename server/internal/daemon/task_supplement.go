@@ -163,8 +163,34 @@ func (d *Daemon) runTaskSupplementLoop(ctx context.Context, session *agent.Sessi
 		// The adapter owns transport deadlines. Hook-based providers wait for a
 		// safe boundary, which can follow a long-running tool; run cancellation
 		// still aborts that wait and prevents late delivery.
-		injectErr := session.Supplement(ctx, formatTaskSupplementInstruction(supplement.AuthorName, supplement.Content))
+		var injectErr error
+		attempted := false
+		content := formatTaskSupplementInstruction(supplement.AuthorName, supplement.Content)
+		if supplement.MuxpilotGeneration > 0 {
+			authorityCtx, cancelAuthority := context.WithTimeout(ctx, 3*time.Second)
+			injectErr = d.client.CheckMuxpilotSupplementAuthority(authorityCtx, taskID, supplement.CommentID, supplement.MuxpilotProjectID, supplement.MuxpilotGeneration)
+			cancelAuthority()
+			content = fmt.Sprintf("[COORDINATOR GUIDANCE, generation %d]\nThis instruction comes from the project's external coordinator, acting under the owner's delegated policy. It is not a human approval. Preserve the user's goal and apply only this task-scoped guidance.\n\n%s", supplement.MuxpilotGeneration, supplement.Content)
+		}
+		if injectErr == nil {
+			deliveryCtx := ctx
+			if supplement.MuxpilotGeneration > 0 {
+				deliveryCtx = agent.WithSupplementAuthority(ctx, func(checkCtx context.Context) error {
+					return d.client.CheckMuxpilotSupplementAuthority(checkCtx, taskID, supplement.CommentID, supplement.MuxpilotProjectID, supplement.MuxpilotGeneration)
+				})
+			}
+			attempted = true
+			injectErr = session.Supplement(deliveryCtx, content)
+		}
 		reason := taskSupplementFailureReason(ctx, injectErr)
+		unknown := injectErr != nil && supplement.MuxpilotGeneration > 0 && attempted && !errors.Is(injectErr, agent.ErrSupplementAuthority)
+		if injectErr != nil && supplement.MuxpilotGeneration > 0 {
+			if unknown {
+				reason = "delivery_unknown"
+			} else {
+				reason = "coordinator_revoked"
+			}
+		}
 		if injectErr != nil {
 			// Raw provider/Go diagnostics remain local. Workspace-visible state is
 			// restricted to the stable reason code sent below.
@@ -172,7 +198,12 @@ func (d *Daemon) runTaskSupplementLoop(ctx context.Context, session *agent.Sessi
 		}
 
 		ackCtx, cancelAck := context.WithTimeout(context.WithoutCancel(ctx), taskSupplementAckTimeout)
-		ackErr := d.client.AckTaskSupplement(ackCtx, taskID, supplement.CommentID, injectErr == nil, reason)
+		var ackErr error
+		if unknown {
+			ackErr = d.client.MarkMuxpilotSupplementUnknown(ackCtx, taskID, supplement.CommentID)
+		} else {
+			ackErr = d.client.AckTaskSupplement(ackCtx, taskID, supplement.CommentID, injectErr == nil, reason)
+		}
 		cancelAck()
 		if ackErr != nil {
 			taskLog.Warn("additional message acknowledgement failed", "comment_id", supplement.CommentID, "error", ackErr)

@@ -128,6 +128,16 @@ describe("AttributionBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("identifies coordinator-originated runs separately from direct human actions", () => {
+    renderWithI18n(<AttributionBadge attribution={{
+      source: "external_coordinator", precise: true,
+      initiator: { id: "u4", name: "Ada" },
+    }} />);
+    expect(screen.getByText("On behalf of Ada")).toBeInTheDocument();
+    expect(screen.getByTitle("External coordinator")).toBeInTheDocument();
+    expect(screen.queryByTitle("Direct member action")).not.toBeInTheDocument();
+  });
+
   it("degrades gracefully for an unknown source label", () => {
     const attribution: TaskAttribution = {
       source: "future_source",

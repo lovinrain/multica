@@ -1,4 +1,11 @@
 {
+  "muxpilot": {
+    "terminal": {
+      "live": "实时终端",
+      "history": "终端历史",
+      "unavailable": "终端不可用"
+    }
+  },
   "inline_run": {
     "label": "{{name}} 的运行",
     "stop": "停止",
@@ -712,6 +719,7 @@
       "on_behalf_of": "代表 {{name}}",
       "someone": "某位成员",
       "source_direct_human": "成员直接操作",
+      "source_external_coordinator": "外部协调器",
       "source_delegation": "由其他运行委托",
       "source_comment_source": "来自评论线程",
       "source_trigger_owner": "自动化触发器创建者",

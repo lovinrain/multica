@@ -1,4 +1,11 @@
 {
+  "muxpilot": {
+    "terminal": {
+      "live": "Terminal en direct",
+      "history": "Historique du terminal",
+      "unavailable": "Terminal indisponible"
+    }
+  },
   "inline_run": {
     "label": "Exécution de {{name}}",
     "stop": "Arrêter",
@@ -740,6 +747,7 @@
       "on_behalf_of": "Au nom de {{name}}",
       "someone": "quelqu'un",
       "source_direct_human": "Action directe d'un membre",
+      "source_external_coordinator": "Coordinateur externe",
       "source_delegation": "Délégué depuis une autre exécution",
       "source_comment_source": "Depuis un fil de commentaires",
       "source_trigger_owner": "Créateur du déclencheur d'automatisation",

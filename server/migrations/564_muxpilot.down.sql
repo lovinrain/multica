@@ -1,0 +1,13 @@
+DROP TRIGGER IF EXISTS muxpilot_task_admission ON agent_task_queue;
+DROP FUNCTION IF EXISTS admit_muxpilot_task();
+DROP FUNCTION IF EXISTS muxpilot_task_claimable(uuid,uuid);
+DROP TRIGGER IF EXISTS muxpilot_task_feed ON agent_task_queue;
+DROP TRIGGER IF EXISTS muxpilot_supplement_feed ON task_supplement;
+DROP TRIGGER IF EXISTS muxpilot_comment_feed ON comment;
+DROP TRIGGER IF EXISTS muxpilot_issue_feed ON issue;
+DROP FUNCTION IF EXISTS record_muxpilot_event();
+DROP TABLE IF EXISTS muxpilot_operation;
+DROP TABLE IF EXISTS muxpilot_event;
+DROP TABLE IF EXISTS muxpilot_run;
+DROP TABLE IF EXISTS muxpilot_issue;
+DROP TABLE IF EXISTS muxpilot_coordinator;

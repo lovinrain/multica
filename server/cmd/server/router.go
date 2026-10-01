@@ -1589,6 +1589,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/tasks/{taskId}/start", h.StartTask)
 		r.Post("/tasks/{taskId}/supplements/claim", h.ClaimTaskSupplement)
 		r.Post("/tasks/{taskId}/supplements/{commentId}/ack", h.AckTaskSupplement)
+		r.Get("/tasks/{taskId}/supplements/{commentId}/authority", h.MuxpilotSupplementAuthority)
 		r.Post("/tasks/{taskId}/wait-local-directory", h.MarkTaskWaitingLocalDirectory)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
 		r.Post("/tasks/{taskId}/complete", h.CompleteTask)
@@ -1634,6 +1635,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// bus; `agent` arrives over MCP rather than this HTTP endpoint.
 			r.Post("/hooks/{key}", h.InvokePluginHook)
 		})
+	})
+
+	// Project coordinator capabilities use their own scoped credential, never PAT auth.
+	r.Get("/api/muxpilot/capabilities", h.MuxpilotCapabilities)
+	r.Route("/api/muxpilot/projects/{projectId}", func(r chi.Router) {
+		r.Post("/commands", h.MuxpilotCommand)
+		r.Get("/events", h.MuxpilotEvents)
+		r.Get("/snapshot", h.MuxpilotSnapshot)
+		r.Get("/operations/{operationId}", h.MuxpilotOperation)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -1984,6 +1994,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+
+			r.With(handler.RequireHumanActor).Post("/api/muxpilot/projects/{projectId}/register", h.MuxpilotRegister)
+			r.With(handler.RequireHumanActor).Post("/api/muxpilot/projects/{projectId}/lease", h.MuxpilotLease)
+			r.With(handler.RequireHumanActor).Get("/api/muxpilot/projects/{projectId}/recovery",h.MuxpilotRecovery)
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)

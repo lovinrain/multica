@@ -438,9 +438,11 @@ func (c *Client) ExtendTaskPrepareLease(ctx context.Context, runtimeID, taskID s
 }
 
 type TaskSupplement struct {
-	CommentID  string `json:"comment_id"`
-	AuthorName string `json:"author_name"`
-	Content    string `json:"content"`
+	MuxpilotGeneration int64  `json:"muxpilot_generation,omitempty"`
+	MuxpilotProjectID  string `json:"muxpilot_project_id,omitempty"`
+	CommentID          string `json:"comment_id"`
+	AuthorName         string `json:"author_name"`
+	Content            string `json:"content"`
 }
 
 func (c *Client) ClaimTaskSupplement(ctx context.Context, taskID string) (*TaskSupplement, error) {
@@ -1414,4 +1416,23 @@ func (c *Client) InvokeAgentPluginHook(ctx context.Context, daemonToken, taskID,
 		return nil, errors.New("the plugin hook did not succeed")
 	}
 	return response.Output, nil
+}
+
+func (c *Client) CheckMuxpilotSupplementAuthority(ctx context.Context, taskID, commentID, projectID string, generation int64) error {
+	var authority struct {
+		Generation int64  `json:"generation"`
+		ProjectID  string `json:"project_id"`
+		Authorized bool   `json:"authorized"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/supplements/%s/authority", taskID, commentID), &authority); err != nil {
+		return err
+	}
+	if !authority.Authorized || authority.Generation != generation || authority.ProjectID != projectID {
+		return fmt.Errorf("coordinator supplement authority changed")
+	}
+	return nil
+}
+
+func (c *Client) MarkMuxpilotSupplementUnknown(ctx context.Context, taskID, commentID string) error {
+	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/supplements/%s/ack", taskID, commentID), map[string]any{"delivered": false, "outcome_unknown": true, "error": "delivery_unknown"}, nil, []time.Duration{0, 100 * time.Millisecond, 300 * time.Millisecond})
 }

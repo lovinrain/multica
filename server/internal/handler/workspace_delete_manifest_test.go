@@ -98,6 +98,12 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"lark_user_binding":                  workspaceDelete,
 	"maintenance_job":                    workspaceDeleteKeep, // Global maintenance audit history, not workspace-owned.
 	"member":                             workspaceDelete,
+	"muxpilot_coordinator":               workspaceDelete,
+	"muxpilot_event":                     workspaceDelete,
+	"muxpilot_issue":                     workspaceDelete,
+	"muxpilot_operation":                 workspaceDelete,
+	"muxpilot_run":                       workspaceDelete,
+	"muxpilot_supplement":                workspaceDelete,
 	"agent_mcp_server":                   workspaceDelete,
 	"workspace_mcp_server":               workspaceDelete,
 	"notification_preference":            workspaceDelete,

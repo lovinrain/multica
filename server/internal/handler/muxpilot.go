@@ -114,6 +114,11 @@ func (h *Handler) MuxpilotRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// Reuse the workspace write fence before any project/coordinator locks.
+	if _, err = h.Queries.WithTx(tx).LockWorkspaceForChatSessionCreate(r.Context(), wsID); err != nil {
+		writeError(w, 404, "workspace not found")
+		return
+	}
 	// Registration has no coordinator yet. The advisory lock serializes retries.
 	_, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, uuidToString(projectID))
 	if err != nil {
@@ -215,6 +220,12 @@ func (h *Handler) MuxpilotLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// Serialize fresh coordinator metadata with workspace teardown before
+	// taking project/coordinator locks, matching deletion's lock order.
+	if _, err = h.Queries.WithTx(tx).LockWorkspaceForChatSessionCreate(r.Context(), wsID); err != nil {
+		writeError(w, 404, "workspace not found")
+		return
+	}
 	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, uuidToString(projectID)); err != nil {
 		muxpilotProblem(w, err)
 		return

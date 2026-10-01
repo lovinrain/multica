@@ -1172,6 +1172,12 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.SetWorkspaceTeardownMode(ctx) },
 		},
 		{
+			// Lock/remove coordinator fences before native owners: control
+			// writes take the coordinator lock before touching issues/tasks.
+			name: "delete muxpilot coordination",
+			run:  func() error { return qtx.DeleteWorkspaceMuxpilotData(ctx, requester.WorkspaceID) },
+		},
+		{
 			// Fences task enqueue / reassignment for the rest of the
 			// transaction. Must run before anything sweeps tasks — see
 			// lockWorkspaceTaskOwners.

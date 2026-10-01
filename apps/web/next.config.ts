@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { resolveBasePath } from "./config/base-path";
 import { config } from "dotenv";
 import { resolve } from "path";
 import {
@@ -39,6 +40,7 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
   : undefined;
 
 const nextConfig: NextConfig = {
+  basePath: resolveBasePath(process.env.NEXT_PUBLIC_BASE_PATH),
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   ...(allowedDevOrigins && allowedDevOrigins.length > 0

@@ -29,11 +29,13 @@
  * `request.url` read gave us by accident, without reintroducing the absolute
  * URL. Do not remove this alongside a "the handler takes no arguments" tidy-up.
  */
+import { withBasePath } from "@/config/base-path";
+
 export const dynamic = "force-dynamic";
 
 export function GET() {
   return new Response(null, {
     status: 308,
-    headers: { Location: "/favicon.svg" },
+    headers: { Location: withBasePath("/favicon.svg") },
   });
 }

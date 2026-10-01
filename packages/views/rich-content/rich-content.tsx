@@ -213,7 +213,8 @@ function RichLink({ href, children }: { href?: string; children?: ReactNode }) {
   // anchor behavior is a dead end and every click must be intercepted. Absent
   // (web), modified clicks are left to the browser — the only way to get a
   // real background tab.
-  const desktopTabs = !!useOptionalNavigation()?.openInNewTab;
+  const navigation = useOptionalNavigation();
+  const desktopTabs = !!navigation?.openInNewTab;
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
@@ -247,7 +248,7 @@ function RichLink({ href, children }: { href?: string; children?: ReactNode }) {
   // URL cannot be resolved.
   const plainLink = (
     <a
-      href={href}
+      href={href ? navigation?.getLinkHref?.(href) ?? href : href}
       onClick={(e) => {
         if (!href) {
           e.preventDefault();

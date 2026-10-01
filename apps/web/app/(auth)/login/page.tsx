@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/config/base-path";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
@@ -222,7 +223,7 @@ function LoginPageContent() {
         googleClientId
           ? {
               clientId: googleClientId,
-              redirectUri: `${window.location.origin}/auth/callback`,
+              redirectUri: `${window.location.origin}${withBasePath("/auth/callback")}`,
               state: googleState,
             }
           : undefined

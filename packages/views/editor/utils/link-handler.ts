@@ -57,6 +57,14 @@ function isWorkspaceScopedPath(pathname: string): boolean {
   return !isReservedSlug(segment.toLowerCase());
 }
 
+/** Remove a deployment mount only at a path boundary. */
+function appPath(pathname: string, app: URL): string | null {
+  const mount = app.pathname.replace(/\/+$/, "");
+  if (!mount) return pathname;
+  if (pathname === mount) return "/";
+  return pathname.startsWith(`${mount}/`) ? pathname.slice(mount.length) : null;
+}
+
 /**
  * Convert an absolute URL that points at a workspace page on this deployment's
  * own app into the in-app path it addresses; `null` for anything else.
@@ -87,8 +95,9 @@ export function toInternalAppPath(
   // Opaque origins (file:, data:) compare equal to each other; only real web
   // origins identify the app.
   if (target.protocol !== "http:" && target.protocol !== "https:") return null;
-  if (!isWorkspaceScopedPath(target.pathname)) return null;
-  return `${target.pathname}${target.search}${target.hash}`;
+  const pathname = appPath(target.pathname, app);
+  if (!pathname || !isWorkspaceScopedPath(pathname)) return null;
+  return `${pathname}${target.search}${target.hash}`;
 }
 
 /** An in-app entity page addressed by a link — the two kinds that have a chip. */
@@ -182,7 +191,12 @@ function toSameOriginPath(
   // Opaque origins (`javascript:`, `data:`) stringify to "null" and can never
   // equal a real one, so they fall out here too.
   if (target.origin !== expected.origin) return null;
-  return `${target.pathname}${target.search}${target.hash}`;
+  // Logical relative routes are already unmounted; absolute links must name
+  // this app mount so sibling applications on the same origin stay external.
+  const pathname = href.startsWith("/") && !href.startsWith("//")
+    ? target.pathname
+    : appPath(target.pathname, expected);
+  return pathname ? `${pathname}${target.search}${target.hash}` : null;
 }
 
 /**
@@ -259,7 +273,7 @@ export function openLink(
   intent: LinkClickIntent = "push",
 ): void {
   const internalPath = href.startsWith("/")
-    ? href
+    ? toSameOriginPath(href, appOrigin)
     : toInternalAppPath(href, appOrigin);
   if (internalPath) {
     let path = internalPath;

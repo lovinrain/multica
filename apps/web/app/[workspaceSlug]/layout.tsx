@@ -1,5 +1,6 @@
 "use client";
 
+import { WEB_BASE_PATH } from "@/config/base-path";
 import { use, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, usePathname } from "next/navigation";
@@ -86,7 +87,7 @@ export default function WorkspaceLayout({
     if (!workspace || typeof document === "undefined") return;
     const oneYear = 60 * 60 * 24 * 365;
     const secure = location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = `last_workspace_slug=${encodeURIComponent(workspaceSlug)}; path=/; max-age=${oneYear}; SameSite=Lax${secure}`;
+    document.cookie = `last_workspace_slug=${encodeURIComponent(workspaceSlug)}; path=${WEB_BASE_PATH || "/"}; max-age=${oneYear}; SameSite=Lax${secure}`;
   }, [workspace, workspaceSlug]);
 
   // Remember whether this slug has resolved before. Used below to avoid

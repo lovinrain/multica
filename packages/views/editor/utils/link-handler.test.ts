@@ -261,3 +261,31 @@ describe("parseWorkspaceEntityLink", () => {
     expect(parseWorkspaceEntityLink("/acme/projects/%E0%A4%A")).toBeNull();
   });
 });
+
+describe("app mount paths", () => {
+  const base = `${APP_ORIGIN}/multica/`;
+  it("routes pasted links within the mount without duplicating the prefix", () => {
+    expect(toInternalAppPath(`${base}acme/issues/MUL-1?tab=a#c`, base))
+      .toBe("/acme/issues/MUL-1?tab=a#c");
+    openLink(`${base}acme/issues/MUL-1`, "acme", base);
+    expect(navigatedPaths()).toEqual(["/acme/issues/MUL-1"]);
+  });
+  it("keeps sibling apps and mounted uploads external", () => {
+    expect(toInternalAppPath(`${APP_ORIGIN}/other/issues/1`, base)).toBeNull();
+    expect(toInternalAppPath(`${base}uploads/a.pdf`, base)).toBeNull();
+    expect(toInternalAppPath(`${APP_ORIGIN}/multica-other/acme/issues/1`, base)).toBeNull();
+  });
+  it("unfurls mounted links and logical relative entity paths", () => {
+    const expected = { kind: "issue", id: "MUL-1", slug: "acme" };
+    expect(parseWorkspaceEntityLink(`${base}acme/issues/MUL-1`, base)).toEqual(expected);
+    expect(parseWorkspaceEntityLink("/acme/issues/MUL-1", base)).toEqual(expected);
+  });
+});
+
+it("keeps logical relative workspace slugs that match the app mount", () => {
+  const base = `${APP_ORIGIN}/acme/`;
+  expect(parseWorkspaceEntityLink("/acme/issues/MUL-1", base))
+    .toEqual({ kind: "issue", id: "MUL-1", slug: "acme" });
+  openLink("/acme/issues/MUL-1", "acme", base);
+  expect(navigatedPaths()).toEqual(["/acme/issues/MUL-1"]);
+});

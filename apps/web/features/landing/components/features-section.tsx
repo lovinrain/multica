@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/config/base-path";
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
@@ -1068,7 +1069,7 @@ export function FeaturesSection() {
                   {feature.visual ? (
                     <div className="relative overflow-hidden rounded-sm">
                       <Image
-                        src={feature.bgImage ?? "/images/feature-bg.webp"}
+                        src={withBasePath(feature.bgImage ?? "/images/feature-bg.webp")}
                         alt=""
                         fill
                         className="object-cover object-center"

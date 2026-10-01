@@ -1,3 +1,4 @@
+import { withBasePath } from "@/config/base-path";
 import Image from "next/image";
 
 type ScreenshotProps = {
@@ -21,7 +22,7 @@ export function Screenshot({
     <figure className="my-10 -mx-4 sm:mx-0">
       <div className="overflow-hidden border border-[#0a0d12]/8 bg-[#f5f5f5]">
         <Image
-          src={src}
+          src={withBasePath(src)}
           alt={alt}
           width={width}
           height={height}

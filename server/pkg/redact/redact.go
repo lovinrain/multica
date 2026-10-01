@@ -4,6 +4,8 @@ package redact
 
 import (
 	"regexp"
+	"sort"
+	"strings"
 )
 
 // secretPattern pairs a compiled regex with its replacement text.
@@ -14,6 +16,9 @@ type secretPattern struct {
 
 // Patterns are checked in order; first match wins per position.
 var patterns = []secretPattern{
+	// Multica task and scoped external coordinator capabilities can appear bare.
+	{regexp.MustCompile(`(?:mat|mxpc)_[A-Za-z0-9_-]{32,}`), "[REDACTED MULTICA TOKEN]"},
+
 	// AWS access key IDs (always start with AKIA)
 	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), "[REDACTED AWS KEY]"},
 
@@ -92,10 +97,10 @@ const depthLimitPlaceholder = "[REDACTED DEPTH LIMIT]"
 // inside a patch body — or the full contents of a deleted .env — untouched on
 // its way to the database and the WebSocket broadcast.
 func InputMap(m map[string]any) map[string]any {
-	return redactMap(m, 0)
+	return redactMap(m, 0, Text)
 }
 
-func redactMap(m map[string]any, depth int) map[string]any {
+func redactMap(m map[string]any, depth int, text func(string) string) map[string]any {
 	if m == nil {
 		return nil
 	}
@@ -104,7 +109,7 @@ func redactMap(m map[string]any, depth int) map[string]any {
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		out[k] = redactValue(v, depth+1)
+		out[k] = redactValue(v, depth+1, text)
 	}
 	return out
 }
@@ -117,31 +122,31 @@ func redactMap(m map[string]any, depth int) map[string]any {
 // the original map and keeps using it after redaction (the daemon handler logs
 // and re-reads it), so mutating through the shared reference would be a
 // surprise at a distance.
-func redactValue(v any, depth int) any {
+func redactValue(v any, depth int, text func(string) string) any {
 	if depth >= maxRedactDepth {
 		return depthLimitPlaceholder
 	}
 	switch t := v.(type) {
 	case string:
-		return Text(t)
+		return text(t)
 	case map[string]any:
-		return redactMap(t, depth)
+		return redactMap(t, depth, text)
 	case []any:
 		out := make([]any, len(t))
 		for i, e := range t {
-			out[i] = redactValue(e, depth+1)
+			out[i] = redactValue(e, depth+1, text)
 		}
 		return out
 	case []string:
 		out := make([]string, len(t))
 		for i, e := range t {
-			out[i] = Text(e)
+			out[i] = text(e)
 		}
 		return out
 	case map[string]string:
 		out := make(map[string]string, len(t))
 		for k, e := range t {
-			out[k] = Text(e)
+			out[k] = text(e)
 		}
 		return out
 	default:
@@ -166,4 +171,103 @@ func Text(s string) string {
 		s = p.re.ReplaceAllString(s, p.replacement)
 	}
 	return s
+}
+
+// Scrubber adds exact, run-owned credential values to the general token rules.
+// It is immutable and safe to share with transcript and terminal reporters.
+type Scrubber struct {
+	values   []string
+	replacer *strings.Replacer
+}
+
+func New(values ...string) *Scrubber {
+	unique := make(map[string]bool)
+	for _, value := range values {
+		if value != "" {
+			unique[value] = true
+		}
+	}
+	sorted := make([]string, 0, len(unique))
+	for value := range unique {
+		sorted = append(sorted, value)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if len(sorted[i]) == len(sorted[j]) {
+			return sorted[i] < sorted[j]
+		}
+		return len(sorted[i]) > len(sorted[j])
+	})
+	pairs := make([]string, 0, len(sorted)*2)
+	for _, value := range sorted {
+		pairs = append(pairs, value, "[REDACTED CREDENTIAL]")
+	}
+	return &Scrubber{values: sorted, replacer: strings.NewReplacer(pairs...)}
+}
+
+func (s *Scrubber) Text(value string) string                     { return Text(s.replacer.Replace(value)) }
+func (s *Scrubber) InputMap(value map[string]any) map[string]any { return redactMap(value, 0, s.Text) }
+
+// Split emits only text that cannot be the start of a known credential. Keep
+// its second return value across periodic transcript flushes and append the
+// next delta before calling Split again. At a semantic frame boundary, Text
+// settles the retained suffix. This prevents a tick between provider deltas
+// from persisting the two halves of a credential in separate rows.
+func (s *Scrubber) Split(value string) (safe, pending string) {
+	var output strings.Builder
+	for offset := 0; offset < len(value); {
+		remaining := value[offset:]
+		// Prefer a potential longer match to a complete shorter credential.
+		// Waiting here is bounded by the longest registered value, even when
+		// complete matches overlap with themselves or with one another.
+		for _, secret := range s.values {
+			if len(remaining) < len(secret) && strings.HasPrefix(secret, remaining) {
+				return s.Text(output.String()), remaining
+			}
+		}
+		matched := false
+		for _, secret := range s.values {
+			if strings.HasPrefix(remaining, secret) {
+				output.WriteString("[REDACTED CREDENTIAL]")
+				offset += len(secret)
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		for _, prefix := range []string{"mat_", "mxpc_"} {
+			if len(remaining) < len(prefix) && strings.HasPrefix(prefix, remaining) {
+				return s.Text(output.String()), remaining
+			}
+			if !strings.HasPrefix(remaining, prefix) {
+				continue
+			}
+			end := len(prefix)
+			for end < len(remaining) && nativeTokenByte(remaining[end]) {
+				end++
+			}
+			if end == len(remaining) && end <= 256 {
+				return s.Text(output.String()), remaining
+			}
+			// Actual native capabilities fit below this cap. A malicious unbounded
+			// token-shaped stream must not make the transcript retain unbounded data.
+			if end > 256 {
+				output.WriteString("[REDACTED MULTICA TOKEN]")
+				offset += end
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		output.WriteByte(value[offset])
+		offset++
+	}
+	return s.Text(output.String()), ""
+}
+
+func nativeTokenByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '-'
 }

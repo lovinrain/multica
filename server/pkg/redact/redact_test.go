@@ -450,3 +450,88 @@ func TestRedactMultipleSecrets(t *testing.T) {
 		t.Fatal("GitHub token not redacted in multi-secret text")
 	}
 }
+
+func TestNativeMulticaCapabilitiesAreRedactedBare(t *testing.T) {
+	for _, prefix := range []string{"mat_", "mxpc_"} {
+		value := prefix + strings.Repeat("a", 48)
+		if got := Text("before " + value + " after"); strings.Contains(got, value) || !strings.Contains(got, "before [REDACTED MULTICA TOKEN] after") {
+			t.Fatalf("native capability redaction failed: %q", got)
+		}
+	}
+}
+
+func TestRunScrubberKnownValuesAndSplitDeltas(t *testing.T) {
+	value := "fixture-api-credential"
+	scrubber := New("", value, value, "fixture-api-credential-long")
+	for at := 1; at < len(value); at++ {
+		first, tail := scrubber.Split("before " + value[:at])
+		second, last := scrubber.Split(tail + value[at:] + " after ")
+		got := first + second + scrubber.Text(last)
+		if got != "before [REDACTED CREDENTIAL] after " {
+			t.Fatalf("split %d = %q", at, got)
+		}
+	}
+	if got := scrubber.Text("fixture-api-credential-long"); got != "[REDACTED CREDENTIAL]" {
+		t.Fatalf("overlapping values = %q", got)
+	}
+	input := map[string]any{"changes": []any{map[string]any{"content": value, "path": ".env"}}, "argv": []string{value}}
+	output := scrubber.InputMap(input)
+	blob, _ := json.Marshal(output)
+	if strings.Contains(string(blob), value) || !strings.Contains(string(blob), ".env") {
+		t.Fatalf("nested known value = %s", blob)
+	}
+	if input["argv"].([]string)[0] != value {
+		t.Fatal("scrubber mutated provider-owned input")
+	}
+}
+
+func TestRunScrubberHoldsNativeTokenAcrossFlushes(t *testing.T) {
+	for _, prefix := range []string{"mat_", "mxpc_"} {
+		value := prefix + strings.Repeat("b", 48)
+		scrubber := New()
+		for at := 1; at < len(value); at++ {
+			first, tail := scrubber.Split("before " + value[:at])
+			second, last := scrubber.Split(tail + value[at:] + " after ")
+			if got := first + second + scrubber.Text(last); got != "before [REDACTED MULTICA TOKEN] after " {
+				t.Fatalf("prefix %s split%d = %q", prefix, at, got)
+			}
+		}
+	}
+}
+
+func TestRunScrubberDoesNotSplitCompleteOverlappingCredential(t *testing.T) {
+	for _, value := range []string{"abcabc", "abab", "aaaa"} {
+		scrubber := New(value)
+		first, tail := scrubber.Split(value)
+		got := first + scrubber.Text(tail)
+		if got != "[REDACTED CREDENTIAL]" {
+			t.Fatalf("overlapping complete %q = %q", value, got)
+		}
+		first, tail = scrubber.Split("before " + value + value[:2])
+		second, last := scrubber.Split(tail + value[2:] + " after ")
+		if got = first + second + scrubber.Text(last); got != "before [REDACTED CREDENTIAL][REDACTED CREDENTIAL] after " {
+			t.Fatalf("overlapping continued %q = %q", value, got)
+		}
+	}
+}
+
+func TestRunScrubberKeepsLongerCredentialWhenShortValuePrefixesIt(t *testing.T) {
+	scrubber := New("abc", "abcdef")
+	first, tail := scrubber.Split("before abc")
+	second, last := scrubber.Split(tail + "def after ")
+	if got := first + second + scrubber.Text(last); got != "before [REDACTED CREDENTIAL] after " {
+		t.Fatalf("prefix-overlap stream = %q", got)
+	}
+}
+
+func TestRunScrubberBoundsOverlappingAndNativeCandidateRetention(t *testing.T) {
+	scrubber := New("aaaa")
+	_, tail := scrubber.Split(strings.Repeat("a", 10000))
+	if len(tail) > len("aaaa") {
+		t.Fatalf("overlapping suffix retained %d bytes", len(tail))
+	}
+	safe, tail := New().Split("mxpc_" + strings.Repeat("z", 10000))
+	if tail != "" || safe != "[REDACTED MULTICA TOKEN]" {
+		t.Fatalf("unbounded native candidate was retained")
+	}
+}

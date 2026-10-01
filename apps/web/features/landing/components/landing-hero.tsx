@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/config/base-path";
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Download } from "lucide-react";
@@ -120,7 +121,7 @@ function LandingBackdrop() {
     <div className="pointer-events-none absolute inset-0">
       {/* This artwork is above the fold, so preload it alongside the product preview. */}
       <Image
-        src="/images/landing-bg.webp"
+        src={withBasePath("/images/landing-bg.webp")}
         alt=""
         fill
         preload
@@ -136,7 +137,7 @@ function ProductImage({ alt }: { alt: string }) {
     <div>
       <div className="relative overflow-hidden border border-white/14">
         <Image
-          src="/images/landing-hero.webp"
+          src={withBasePath("/images/landing-hero.webp")}
           alt={alt}
           width={2640}
           height={1781}

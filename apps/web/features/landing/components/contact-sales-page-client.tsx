@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/config/base-path";
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { LandingHeader } from "./landing-header";
@@ -102,7 +103,7 @@ export function ContactSalesPageClient() {
     setState({ status: "submitting" });
 
     try {
-      const res = await fetch("/api/contact-sales", {
+      const res = await fetch(withBasePath("/api/contact-sales"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

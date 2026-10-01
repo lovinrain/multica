@@ -6,6 +6,7 @@ import {
   NavigationProvider,
   type NavigationAdapter,
 } from "@multica/views/navigation";
+import { routeHref } from "@/config/base-path";
 import { canGoBackInApp } from "./in-app-history";
 
 /**
@@ -31,7 +32,7 @@ function useInternalLinkHandler(router: ReturnType<typeof useRouter>) {
         detail?.disposition === "foreground-tab"
       ) {
         window.open(
-          window.location.origin + path,
+          window.location.origin + routeHref(path),
           "_blank",
           "noopener,noreferrer",
         );
@@ -76,6 +77,7 @@ function NavigationProviderInner({
   useInternalLinkHandler(router);
 
   const adapter: NavigationAdapter = {
+    getLinkHref: routeHref,
     push: router.push,
     replace: router.replace,
     back: router.back,
@@ -85,7 +87,7 @@ function NavigationProviderInner({
     searchParams: new URLSearchParams(searchParams.toString()),
     hash,
     getShareableUrl: (path: string) =>
-      typeof window === "undefined" ? path : window.location.origin + path,
+      typeof window === "undefined" ? path : window.location.origin + routeHref(path),
     // router.prefetch is a no-op in dev mode by Next.js design; in production
     // it warms the RSC payload + route chunk so the next push() commits with
     // no network round-trip. Safe to call repeatedly — Next dedupes internally.

@@ -4,13 +4,13 @@ import { useMemo } from "react";
 import { useOptionalNavigation } from "./context";
 
 /**
- * Origin of this deployment's public app URL, or `null` when the platform can't
+ * Public base URL of this deployment, or `null` when the platform can't
  * name one (server render, desktop before runtime config lands, or a component
  * mounted outside a NavigationProvider).
  *
  * Derived from the adapter's `getShareableUrl` rather than a separate adapter
  * field: "the public URL of this app" is already implemented per platform there
- * (web: the current origin, desktop: the connected environment's app URL), and a
+ * (web: the current origin and mount path, desktop: the connected environment's app URL), and a
  * second copy of the same fact is a copy that can drift.
  *
  * Used to tell an in-app destination written as an absolute URL
@@ -24,7 +24,7 @@ export function useAppOrigin(): string | null {
   return useMemo(() => {
     if (!getShareableUrl) return null;
     try {
-      return new URL(getShareableUrl("/")).origin;
+      return new URL(getShareableUrl("/")).toString();
     } catch {
       return null;
     }

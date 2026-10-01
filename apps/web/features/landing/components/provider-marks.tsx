@@ -1,3 +1,4 @@
+import { withBasePath } from "@/config/base-path";
 import Image from "next/image";
 import { cn } from "@multica/ui/lib/utils";
 
@@ -165,7 +166,7 @@ function CodeBuddyMark({ className }: { className?: string }) {
 function TraeMark({ className }: { className?: string }) {
   return (
     <Image
-      src="/images/providers/trae.png"
+      src={withBasePath("/images/providers/trae.png")}
       alt=""
       aria-hidden
       width={48}
@@ -182,7 +183,7 @@ function TraeMark({ className }: { className?: string }) {
 function HermesMark({ className }: { className?: string }) {
   return (
     <Image
-      src="/images/providers/hermes.png"
+      src={withBasePath("/images/providers/hermes.png")}
       alt=""
       aria-hidden
       width={48}

@@ -11,6 +11,7 @@ import { STATUS_CONFIG } from "@multica/core/issues/config";
 import type { BuiltInIssueStatus } from "@multica/core/types";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
+import { useOptionalNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 /**
@@ -47,6 +48,7 @@ export function StepWelcome({
   isWeb?: boolean;
 }) {
   const { t } = useT("onboarding");
+  const navigation = useOptionalNavigation();
   // Tracks which button is mid-flight so we can show a per-button
   // spinner and disable both while one is in progress.
   const [pending, setPending] = useState<"next" | "skip" | null>(null);
@@ -114,7 +116,7 @@ export function StepWelcome({
                       onboarding tab in case the desktop install
                       stalls and the user falls back here. */}
                   <a
-                    href="/download"
+                    href={navigation?.getLinkHref?.("/download") ?? "/download"}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={buttonVariants({ size: "lg" })}

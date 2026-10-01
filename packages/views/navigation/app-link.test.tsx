@@ -56,6 +56,15 @@ describe("AppLink", () => {
     );
   });
 
+  it("uses the web mount for native anchors while pushing the logical route", () => {
+    const adapter = makeAdapter({ getLinkHref: (path) => `/multica${path}` });
+    renderLink(adapter, { href: "/acme/issues/MUL-7" });
+    const link = screen.getByRole("link", { name: "go" });
+    expect(link).toHaveAttribute("href", "/multica/acme/issues/MUL-7");
+    fireEvent.click(link);
+    expect(adapter.push).toHaveBeenCalledWith("/acme/issues/MUL-7");
+  });
+
   it("calls caller onClick BEFORE push so synchronous side effects (close menu, etc) commit before the transition starts", () => {
     const order: string[] = [];
     const adapter = makeAdapter({

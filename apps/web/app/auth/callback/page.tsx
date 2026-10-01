@@ -1,5 +1,6 @@
 "use client";
 
+import { withBasePath } from "@/config/base-path";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
@@ -70,7 +71,7 @@ function CallbackContent() {
       ? decodeURIComponent(cliStatePart.slice("cli_state:".length))
       : "";
 
-    const redirectUri = `${window.location.origin}/auth/callback`;
+    const redirectUri = `${window.location.origin}${withBasePath("/auth/callback")}`;
 
     // Validate the CLI callback URL before redirecting — the state parameter
     // passes through Google OAuth and must be treated as attacker-controlled.
@@ -221,7 +222,7 @@ function CallbackContent() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
-            <a href={paths.login()} className="text-primary underline-offset-4 hover:underline">
+            <a href={withBasePath(paths.login())} className="text-primary underline-offset-4 hover:underline">
               {t(($) => $.web.callback.back_to_login)}
             </a>
           </CardContent>

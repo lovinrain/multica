@@ -1,5 +1,6 @@
 "use client";
 
+import { WEB_BASE_PATH, withBasePath } from "@/config/base-path";
 import { useMemo } from "react";
 import { CoreProvider } from "@multica/core/platform";
 import { createBrowserCookieLocaleAdapter } from "@multica/core/i18n/browser";
@@ -36,7 +37,7 @@ function hasLegacyToken(): boolean {
 function deriveWsUrl(): string | undefined {
   if (typeof window === "undefined") return undefined;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws`;
+  return `${proto}//${window.location.host}${withBasePath("/ws")}`;
 }
 
 // Build-time version preferred (CI sets NEXT_PUBLIC_APP_VERSION to a git tag
@@ -69,7 +70,7 @@ export function WebProviders({
   const localeAdapter = useMemo(() => createBrowserCookieLocaleAdapter(), []);
   return (
     <CoreProvider
-      apiBaseUrl={apiBaseUrl}
+      apiBaseUrl={apiBaseUrl ?? WEB_BASE_PATH}
       wsUrl={wsUrl || deriveWsUrl()}
       cookieAuth={cookieAuth}
       onLogin={setLoggedInCookie}

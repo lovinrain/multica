@@ -1,3 +1,4 @@
+import { withBasePath } from "@/config/base-path";
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
@@ -76,7 +77,7 @@ export default async function UseCasesIndexPage() {
                   <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[#f5f5f5]">
                     {heroImage ? (
                       <Image
-                        src={heroImage}
+                        src={withBasePath(heroImage)}
                         alt=""
                         fill
                         sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 360px"

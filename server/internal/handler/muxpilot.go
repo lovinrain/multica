@@ -29,7 +29,7 @@ import (
 // Muxpilot owns a scoped coordinator credential. It is intentionally not a PAT
 // and cannot authenticate ordinary Multica endpoints or account operations.
 func (h *Handler) MuxpilotCapabilities(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"protocol": "muxpilot-v1", "capabilities": []string{"coordinator-fence-v1", "operation-receipts-v1", "staged-dispatch-v1", "durable-events-v1", "exact-run-control-v1", "task-terminal-links-v1"}, "supplement_capability": protocol.DaemonCapabilityTaskSupplementV1, "worker_input": "structured-stdio", "interactive_takeover": false})
+	writeJSON(w, http.StatusOK, map[string]any{"protocol": "muxpilot-v1", "capabilities": []string{"coordinator-fence-v1", "operation-receipts-v1", "staged-dispatch-v1", "durable-events-v1", "exact-run-control-v1", "task-terminal-links-v1", "continue-instruction-v1"}, "supplement_capability": protocol.DaemonCapabilityTaskSupplementV1, "worker_input": "structured-stdio", "interactive_takeover": false})
 }
 
 type muxpilotRegisterRequest struct {
@@ -766,8 +766,19 @@ func (h *Handler) muxpilotApply(ctx context.Context, tx pgx.Tx, project, workspa
 			if pending {
 				return nil, 0, nil, muxpilotBad(409, "run_already_pending", "a new attempt is already pending")
 			}
-			next, e := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{ID: dbid.NewV7(), AgentID: agent.ID, RuntimeID: agent.RuntimeID, IssueID: issue.ID, Priority: task.Priority, OriginatorUserID: user, AccountableUserID: user, OriginatorSource: pgtype.Text{String: "external_coordinator", Valid: true}, RerunOfTaskID: task.ID})
-			return map[string]any{"task_id": uuidToString(next.ID), "previous_task_id": req.TaskID, "status": "queued"}, 201, func() { h.TaskService.NotifyTaskEnqueued(ctx, next) }, e
+			// An optional follow-up instruction is the cancel-and-resume path for
+			// providers without live supplements: it reaches only this new
+			// attempt's per-turn prompt as a run-scoped handoff note, while the
+			// rerun lineage lets the claim resume the source run's session.
+			var handoff pgtype.Text
+			if note := strings.TrimSpace(req.Content); note != "" {
+				if len(req.Content) > maxCommentContentBytes {
+					return nil, 0, nil, muxpilotBad(400, "invalid_content", "follow-up instruction exceeds the content limit")
+				}
+				handoff = pgtype.Text{String: sanitizeNullBytes("[Muxpilot coordinator follow-up]\n" + note), Valid: true}
+			}
+			next, e := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{ID: dbid.NewV7(), AgentID: agent.ID, RuntimeID: agent.RuntimeID, IssueID: issue.ID, Priority: task.Priority, OriginatorUserID: user, AccountableUserID: user, OriginatorSource: pgtype.Text{String: "external_coordinator", Valid: true}, RerunOfTaskID: task.ID, HandoffNote: handoff})
+			return map[string]any{"task_id": uuidToString(next.ID), "previous_task_id": req.TaskID, "status": "queued", "instruction_attached": handoff.Valid}, 201, func() { h.TaskService.NotifyTaskEnqueued(ctx, next) }, e
 		}
 		if req.Action == "bind_terminal" {
 			parsed, e := url.Parse(req.TerminalURL)

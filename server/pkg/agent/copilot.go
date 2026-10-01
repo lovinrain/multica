@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // copilotBackend implements Backend by spawning the GitHub Copilot CLI
@@ -293,7 +295,10 @@ func handleCopilotEvent(evt copilotEvent, st *copilotEventState) []Message {
 		})
 
 	case "assistant.turn_start":
-		msgs = append(msgs, Message{Type: MessageStatus, Status: "running"})
+		// A known session id (assigned at launch or being resumed) pins the
+		// resume pointer while the run is in flight: a cancelled run never
+		// reaches the result event that otherwise names the session.
+		msgs = append(msgs, Message{Type: MessageStatus, Status: "running", SessionID: st.sessionID})
 
 	case "session.error":
 		var se copilotSessionError
@@ -347,7 +352,11 @@ func (b *copilotBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 	timeout := opts.Timeout
 	runCtx, cancel := runContext(ctx, timeout)
 
-	args := buildCopilotArgs(prompt, opts, b.cfg.Logger)
+	var assignedSessionID string
+	if opts.ResumeSessionID == "" && copilotSupportsSessionID(b.cfg.CLIVersion) {
+		assignedSessionID = uuid.NewString()
+	}
+	args := buildCopilotArgs(prompt, opts, assignedSessionID, b.cfg.Logger)
 	cmd, _, _ := b.cfg.commandAt(execName).execVia(runCtx, chooseCopilotInvocation, lookedUp, args, b.cfg.Logger)
 	hideAgentWindow(cmd)
 	b.cfg.logAgentCommand(cmd, newAgentCommandLogArgs(args))
@@ -386,6 +395,10 @@ func (b *copilotBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 			seedModel = "copilot"
 		}
 		st := newCopilotEventState(seedModel, opts.ResumeSessionID != "")
+		st.sessionID = opts.ResumeSessionID
+		if assignedSessionID != "" {
+			st.sessionID = assignedSessionID
+		}
 
 		go func() {
 			<-runCtx.Done()
@@ -620,14 +633,30 @@ var copilotBlockedArgs = map[string]blockedArgMode{
 	"--yolo":            blockedStandalone,
 	"--no-ask-user":     blockedStandalone,
 	"--resume":          blockedWithValue,  // managed via ExecOptions.ResumeSessionID
+	"--session-id":      blockedWithValue,  // assigned by the backend for new sessions
 	"--acp":             blockedStandalone, // prevent switching to ACP mode
+}
+
+// copilotSessionIDMinVersion is the first Copilot CLI whose --session-id
+// starts a new session with a caller-chosen UUID.
+var copilotSessionIDMinVersion = semver{Major: 1, Minor: 0, Patch: 51}
+
+// copilotSupportsSessionID reports whether the detected CLI accepts
+// --session-id for a new session. Unknown versions keep the legacy argv.
+func copilotSupportsSessionID(version string) bool {
+	v, err := parseSemver(version)
+	return err == nil && !v.lessThan(copilotSessionIDMinVersion)
 }
 
 // buildCopilotArgs assembles the argv for a one-shot copilot invocation.
 //
 //	copilot -p "<prompt>" --output-format json --allow-all --no-ask-user
-//	        [--resume <session-id>] [--model <model>]
-func buildCopilotArgs(prompt string, opts ExecOptions, logger *slog.Logger) []string {
+//	        [--model <model>] [--resume <session-id> | --session-id=<new-id>]
+//
+// Copilot's JSONL names the session only on the final result event, so a new
+// session's id is assigned up front when the CLI supports it; otherwise a
+// cancelled run could not be resumed by a follow-up attempt.
+func buildCopilotArgs(prompt string, opts ExecOptions, newSessionID string, logger *slog.Logger) []string {
 	args := []string{
 		"-p", prompt,
 		"--output-format", "json",
@@ -639,6 +668,8 @@ func buildCopilotArgs(prompt string, opts ExecOptions, logger *slog.Logger) []st
 	}
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--resume", opts.ResumeSessionID)
+	} else if newSessionID != "" {
+		args = append(args, "--session-id="+newSessionID)
 	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, copilotBlockedArgs, logger)...)
 	return args

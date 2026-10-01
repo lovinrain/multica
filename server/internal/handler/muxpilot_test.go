@@ -146,6 +146,37 @@ func TestMuxpilotSupplementExactRunAndTerminalURL(t *testing.T) {
 	testutil.Call(t, testHandler.MuxpilotCommand, f.request("POST", "/commands", payload)).Want(409)
 }
 
+func TestMuxpilotCopilotCancelAndContinueCarriesInstruction(t *testing.T) {
+	f := newMuxpilotCoordinator(t)
+	// Copilot runs negotiate no live supplement capability.
+	s := newSupplementFixture(t, "copilot", "running", false)
+	dbfx.Exec(t, `UPDATE issue SET project_id=$2 WHERE id=$1`, s.issueID, f.project)
+	dbfx.Exec(t, `INSERT INTO muxpilot_run(task_id,project_id,generation) VALUES($1,$2,$3)`, s.taskID, f.project, f.generation)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE rerun_of_task_id=$1`, s.taskID)
+	command := func(body map[string]any) *http.Request { return f.request("POST", "/commands", body) }
+
+	testutil.Call(t, testHandler.MuxpilotCommand, command(map[string]any{"operation_id": uuid.NewString(), "action": "supplement", "task_id": s.taskID, "content": "Use the shared email service"})).Want(412)
+	testutil.Call(t, testHandler.MuxpilotCommand, command(map[string]any{"operation_id": uuid.NewString(), "action": "continue", "task_id": s.taskID, "content": "too early"})).Want(409)
+	testutil.Call(t, testHandler.MuxpilotCommand, command(map[string]any{"operation_id": uuid.NewString(), "action": "cancel", "task_id": s.taskID})).Want(200)
+
+	resume := map[string]any{"operation_id": uuid.NewString(), "action": "continue", "task_id": s.taskID, "content": "  Use the shared email service; keep the API unchanged.  "}
+	var first, again map[string]any
+	testutil.Call(t, testHandler.MuxpilotCommand, command(resume)).Want(201).JSON(&first)
+	testutil.Call(t, testHandler.MuxpilotCommand, command(resume)).Want(201).JSON(&again)
+	if first["task_id"] != again["task_id"] || first["previous_task_id"] != s.taskID || first["instruction_attached"] != true {
+		t.Fatalf("continue receipt = %+v, retry = %+v", first, again)
+	}
+	var note, lineage string
+	dbfx.QueryRow(t, `SELECT handoff_note, rerun_of_task_id::text FROM agent_task_queue WHERE id=$1`, first["task_id"]).Scan(&note, &lineage)
+	if note != "[Muxpilot coordinator follow-up]\nUse the shared email service; keep the API unchanged." || lineage != s.taskID {
+		t.Fatalf("continued attempt note=%q lineage=%q", note, lineage)
+	}
+	if n := dbfx.Count(t, `SELECT count(*) FROM agent_task_queue WHERE rerun_of_task_id=$1`, s.taskID); n != 1 {
+		t.Fatalf("retry created %d attempts", n)
+	}
+	testutil.Call(t, testHandler.MuxpilotCommand, command(map[string]any{"operation_id": uuid.NewString(), "action": "continue", "task_id": s.taskID})).Want(409)
+}
+
 func TestMuxpilotNativeHumanChangeRetainsActor(t *testing.T) {
 	f := newMuxpilotCoordinator(t)
 	issue := dbfx.Issue(t, "Human edited", testutil.Cols{"project_id": f.project})

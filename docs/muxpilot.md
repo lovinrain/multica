@@ -59,7 +59,7 @@ receipt and changed-body reuse returns `operation_conflict`.
 | `scope_remove` | `issue_id`, `content` decision; explicitly excludes work from stage prerequisites |
 | `supplement` | exact native run `task_id`, `content`; returns pending delivery, never an invented acknowledgement |
 | `cancel` | exact native run `task_id`; requests cancellation and explicitly does not claim provider termination |
-| `continue` | ended exact `task_id`; creates a distinct queued attempt with lineage; accepted work must be reopened first |
+| `continue` | ended exact `task_id`, optional `content`; creates a distinct queued attempt with lineage; accepted work must be reopened first. Nonempty bounded `content` becomes that attempt's run-scoped handoff note (`[Muxpilot coordinator follow-up]`), and the receipt reports `instruction_attached` (`continue-instruction-v1`) |
 | `adopt` / `adopt_run` | reconciled exact `task_id`; updates its receiver epoch, preserving the same attempt |
 | `bind_terminal` | exact `task_id`, HTTP(S) `terminal_url`, full `session_id` identity, `terminal_state` (`live`, `history`, `unavailable`) |
 | `remap_repository` | `repo_root`, `daemon_id`, `content` decision; requires all attempts to have ended and holds future dispatch |
@@ -96,6 +96,17 @@ allowlisted payload. Provider credentials, runtime configuration, prompts and
 unbounded execution output are excluded. Native human issue edits retain their
 trusted transaction actor; coordinator tasks use `external_coordinator`
 attribution and guidance is visibly identified as coordinator input.
+
+### Steering providers without live input
+
+Providers that negotiate no task supplement capability, such as GitHub Copilot
+CLI's non-interactive `-p` mode, refuse `supplement` with
+`task_supplement_unsupported`. Coordinators steer them by cancel-and-resume:
+`cancel` the exact run, wait until it has ended, then `continue` it with the
+instruction as `content`. The claim resolves the session and workdir from that
+exact source run (`rerun_of_task_id`) and resumes it when the cancellation is
+resume-safe; the per-turn prompt renders the handoff note before the issue
+instructions. Task events carry only IDs and status, never the note.
 
 ## Input reservation and recovery
 

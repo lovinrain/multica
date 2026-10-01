@@ -987,7 +987,7 @@ func TestCopilotExecuteSurfacesStderrOnNonZeroResult(t *testing.T) {
 func TestBuildCopilotArgsBaseline(t *testing.T) {
 	t.Parallel()
 
-	args := buildCopilotArgs("write a haiku", ExecOptions{}, slog.Default())
+	args := buildCopilotArgs("write a haiku", ExecOptions{}, "", slog.Default())
 	expected := []string{
 		"-p", "write a haiku",
 		"--output-format", "json",
@@ -1008,7 +1008,7 @@ func TestBuildCopilotArgsBaseline(t *testing.T) {
 func TestBuildCopilotArgsWithModel(t *testing.T) {
 	t.Parallel()
 
-	args := buildCopilotArgs("hi", ExecOptions{Model: "gpt-4o"}, slog.Default())
+	args := buildCopilotArgs("hi", ExecOptions{Model: "gpt-4o"}, "", slog.Default())
 
 	var foundModel bool
 	for i, a := range args {
@@ -1028,7 +1028,7 @@ func TestBuildCopilotArgsWithModel(t *testing.T) {
 func TestBuildCopilotArgsWithResume(t *testing.T) {
 	t.Parallel()
 
-	args := buildCopilotArgs("hi", ExecOptions{ResumeSessionID: "sess-42"}, slog.Default())
+	args := buildCopilotArgs("hi", ExecOptions{ResumeSessionID: "sess-42"}, "", slog.Default())
 
 	var foundResume bool
 	for i, a := range args {
@@ -1048,7 +1048,7 @@ func TestBuildCopilotArgsWithResume(t *testing.T) {
 func TestBuildCopilotArgsOmitsOptionalWhenEmpty(t *testing.T) {
 	t.Parallel()
 
-	args := buildCopilotArgs("hi", ExecOptions{}, slog.Default())
+	args := buildCopilotArgs("hi", ExecOptions{}, "", slog.Default())
 	for _, a := range args {
 		if a == "--model" {
 			t.Fatalf("expected no --model flag when Model is empty, got args=%v", args)
@@ -1064,7 +1064,7 @@ func TestBuildCopilotArgsPassesThroughCustomArgs(t *testing.T) {
 
 	args := buildCopilotArgs("hi", ExecOptions{
 		CustomArgs: []string{"--max-turns", "50"},
-	}, slog.Default())
+	}, "", slog.Default())
 
 	if args[len(args)-2] != "--max-turns" || args[len(args)-1] != "50" {
 		t.Fatalf("expected --max-turns 50 at end of args, got %v", args)
@@ -1076,7 +1076,7 @@ func TestBuildCopilotArgsFiltersBlockedCustomArgs(t *testing.T) {
 
 	args := buildCopilotArgs("hi", ExecOptions{
 		CustomArgs: []string{"--output-format", "text", "--max-turns", "50"},
-	}, slog.Default())
+	}, "", slog.Default())
 
 	for i, a := range args {
 		if a == "--output-format" && i+1 < len(args) && args[i+1] == "text" {
@@ -1099,7 +1099,7 @@ func TestBuildCopilotArgsBlocksResumeAndACP(t *testing.T) {
 
 	args := buildCopilotArgs("hi", ExecOptions{
 		CustomArgs: []string{"--resume", "bad-session", "--acp", "--yolo"},
-	}, slog.Default())
+	}, "", slog.Default())
 
 	for _, a := range args {
 		if a == "bad-session" {
@@ -1110,6 +1110,61 @@ func TestBuildCopilotArgsBlocksResumeAndACP(t *testing.T) {
 		}
 		if a == "--yolo" {
 			t.Fatalf("blocked --yolo should have been filtered: %v", args)
+		}
+	}
+}
+
+func TestCopilotSupportsSessionIDFromDetectedVersion(t *testing.T) {
+	t.Parallel()
+
+	for version, want := range map[string]bool{
+		"":                           false,
+		"not-a-version":              false,
+		"1.0.50":                     false,
+		"1.0.51":                     true,
+		"GitHub Copilot CLI 1.0.90.": true,
+		"2.0.0":                      true,
+	} {
+		if got := copilotSupportsSessionID(version); got != want {
+			t.Errorf("copilotSupportsSessionID(%q) = %v, want %v", version, got, want)
+		}
+	}
+}
+
+func TestBuildCopilotArgsAssignsNewSessionIDButNeverOverridesResume(t *testing.T) {
+	t.Parallel()
+
+	const assigned = "11111111-2222-4333-8444-555555555555"
+	args := strings.Join(buildCopilotArgs("hi", ExecOptions{}, assigned, slog.Default()), " ")
+	if !strings.Contains(args, "--session-id="+assigned) || strings.Contains(args, "--resume") {
+		t.Fatalf("new session argv = %q", args)
+	}
+	resumed := strings.Join(buildCopilotArgs("hi", ExecOptions{ResumeSessionID: "sess-42"}, assigned, slog.Default()), " ")
+	if !strings.Contains(resumed, "--resume sess-42") || strings.Contains(resumed, "--session-id") {
+		t.Fatalf("resumed argv = %q", resumed)
+	}
+	custom := strings.Join(buildCopilotArgs("hi", ExecOptions{
+		CustomArgs: []string{"--session-id", "user-chosen", "--session-id=other", "--max-turns", "5"},
+	}, "", slog.Default()), " ")
+	if strings.Contains(custom, "--session-id") || strings.Contains(custom, "user-chosen") || !strings.Contains(custom, "--max-turns 5") {
+		t.Fatalf("custom args must not choose the session id: %q", custom)
+	}
+}
+
+func TestCopilotTurnStartPinsAKnownSessionID(t *testing.T) {
+	t.Parallel()
+
+	var evt copilotEvent
+	if err := json.Unmarshal([]byte(fixtureTurnStart), &evt); err != nil {
+		t.Fatal(err)
+	}
+	known := newCopilotEventState("copilot", false)
+	known.sessionID = "assigned-session"
+	unknown := newCopilotEventState("copilot", false)
+	for st, want := range map[*copilotEventState]string{known: "assigned-session", unknown: ""} {
+		msgs := handleCopilotEvent(evt, st)
+		if len(msgs) != 1 || msgs[0].Type != MessageStatus || msgs[0].SessionID != want {
+			t.Fatalf("turn start messages = %+v, want status with session %q", msgs, want)
 		}
 	}
 }
